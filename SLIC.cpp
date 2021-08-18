@@ -28,6 +28,8 @@
 #include <fstream>
 #include "SLIC.h"
 #include <chrono>
+#include <omp.h>
+#include <immintrin.h>
 
 typedef chrono::high_resolution_clock Clock;
 
@@ -359,6 +361,14 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 	vector<double> sigmab(numk, 0);
 	vector<double> sigmax(numk, 0);
 	vector<double> sigmay(numk, 0);
+	/*
+	double *sigmal = new double[numk];
+	double *sigmaa = new double[numk];
+	double *sigmab = new double[numk];
+	double *sigmax = new double[numk];
+	double *sigmay = new double[numk];
+	double *inv = new double[numk];
+	*/
 	vector<int> clustersize(numk, 0);
 	vector<double> inv(numk, 0);//to store 1/clustersize[k] values
 	vector<double> distxy(sz, DBL_MAX);
@@ -377,13 +387,14 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		//------
 
 		distvec.assign(sz, DBL_MAX);
+		
 		for( int n = 0; n < numk; n++ )
 		{
 			int y1 = max(0,			(int)(kseedsy[n]-offset));
 			int y2 = min(m_height,	(int)(kseedsy[n]+offset));
 			int x1 = max(0,			(int)(kseedsx[n]-offset));
 			int x2 = min(m_width,	(int)(kseedsx[n]+offset));
-
+			#pragma omp parallel for collapse(2)
 			for( int y = y1; y < y2; y++ )
 			{
 				for( int x = x1; x < x2; x++ )
@@ -423,11 +434,15 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 			maxlab.assign(numk,1);
 			maxxy.assign(numk,1);
 		}
-		{for( int i = 0; i < sz; i++ )
 		{
-			if(maxlab[klabels[i]] < distlab[i]) maxlab[klabels[i]] = distlab[i];
-			if(maxxy[klabels[i]] < distxy[i]) maxxy[klabels[i]] = distxy[i];
-		}}
+			//#pragma omp parallel for schedule(dynamic, 1)
+			for( int i = 0; i < sz; i++ )
+			{
+				int temp = klabels[i];
+				if(maxlab[temp] < distlab[i]) maxlab[temp] = distlab[i];
+				if(maxxy[temp] < distxy[i]) maxxy[temp] = distxy[i];
+			}
+		}
 		//-----------------------------------------------------------------
 		// Recalculate the centroid and store in the seed values
 		//-----------------------------------------------------------------
@@ -437,35 +452,42 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		sigmax.assign(numk, 0);
 		sigmay.assign(numk, 0);
 		clustersize.assign(numk, 0);
-
+		#pragma omp simd
 		for( int j = 0; j < sz; j++ )
 		{
 			int temp = klabels[j];
 			//_ASSERT(klabels[j] >= 0);
-			sigmal[klabels[j]] += m_lvec[j];
-			sigmaa[klabels[j]] += m_avec[j];
-			sigmab[klabels[j]] += m_bvec[j];
-			sigmax[klabels[j]] += (j%m_width);
-			sigmay[klabels[j]] += (j/m_width);
+			sigmal[temp] += m_lvec[j];
+			sigmaa[temp] += m_avec[j];
+			sigmab[temp] += m_bvec[j];
+			sigmax[temp] += (j%m_width);
+			sigmay[temp] += (j/m_width);
 
-			clustersize[klabels[j]]++;
+			clustersize[temp]++;
 		}
 
-		{for( int k = 0; k < numk; k++ )
+		{
+			#pragma omp parallel for schedule(dynamic, 1)
+			for( int k = 0; k < numk; k++ )
 		{
 			//_ASSERT(clustersize[k] > 0);
 			if( clustersize[k] <= 0 ) clustersize[k] = 1;
 			inv[k] = 1.0/double(clustersize[k]);//computing inverse now to multiply, than divide later
 		}}
 		
-		{for( int k = 0; k < numk; k++ )
-		{
-			kseedsl[k] = sigmal[k]*inv[k];
-			kseedsa[k] = sigmaa[k]*inv[k];
-			kseedsb[k] = sigmab[k]*inv[k];
-			kseedsx[k] = sigmax[k]*inv[k];
-			kseedsy[k] = sigmay[k]*inv[k];
-		}}
+		
+		{	
+			#pragma omp simd
+			for( int k = 0; k < numk; k++ )
+			{
+				kseedsl[k] = sigmal[k]*inv[k];
+				kseedsa[k] = sigmaa[k]*inv[k];
+				kseedsb[k] = sigmab[k]*inv[k];
+				kseedsx[k] = sigmax[k]*inv[k];
+				kseedsy[k] = sigmay[k]*inv[k];
+			}
+			//__m256d kseedsl_v = _mm256_load_pd(kseedsl);
+		}
 	}
 }
 
