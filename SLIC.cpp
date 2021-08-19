@@ -361,14 +361,7 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 	vector<double> sigmab(numk, 0);
 	vector<double> sigmax(numk, 0);
 	vector<double> sigmay(numk, 0);
-	/*
-	double *sigmal = new double[numk];
-	double *sigmaa = new double[numk];
-	double *sigmab = new double[numk];
-	double *sigmax = new double[numk];
-	double *sigmay = new double[numk];
-	double *inv = new double[numk];
-	*/
+
 	vector<int> clustersize(numk, 0);
 	vector<double> inv(numk, 0);//to store 1/clustersize[k] values
 	vector<double> distxy(sz, DBL_MAX);
@@ -477,16 +470,47 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		
 		
 		{	
-			#pragma omp simd
-			for( int k = 0; k < numk; k++ )
+			// #pragma omp simd
+			// for( int k = 0; k < numk; k++ )
+			// {
+			// 	kseedsl[k] = sigmal[k]*inv[k];
+			// 	kseedsa[k] = sigmaa[k]*inv[k];
+			// 	kseedsb[k] = sigmab[k]*inv[k];
+			// 	kseedsx[k] = sigmax[k]*inv[k];
+			// 	kseedsy[k] = sigmay[k]*inv[k];
+			// }
+			for(int k = 0; k < numk; k+=4)
 			{
-				kseedsl[k] = sigmal[k]*inv[k];
-				kseedsa[k] = sigmaa[k]*inv[k];
-				kseedsb[k] = sigmab[k]*inv[k];
-				kseedsx[k] = sigmax[k]*inv[k];
-				kseedsy[k] = sigmay[k]*inv[k];
+				if(k + 4 >= numk)
+				{
+					for(int kk = k; kk < numk; ++kk)
+					{
+						kseedsl[kk] = sigmal[kk]*inv[kk];
+						kseedsa[kk] = sigmaa[kk]*inv[kk];
+						kseedsb[kk] = sigmab[kk]*inv[kk];
+						kseedsx[kk] = sigmax[kk]*inv[kk];
+						kseedsy[kk] = sigmay[kk]*inv[kk];
+					}
+					break;
+					
+				}
+				__m256d sigmal_v = _mm256_loadu_pd(&sigmal[k]);
+				__m256d sigmaa_v = _mm256_loadu_pd(&sigmaa[k]);
+				__m256d sigmab_v = _mm256_loadu_pd(&sigmab[k]);
+				__m256d sigmax_v = _mm256_loadu_pd(&sigmax[k]);
+				__m256d sigmay_v = _mm256_loadu_pd(&sigmay[k]);
+				__m256d inv_v = _mm256_loadu_pd(&inv[k]);
+				__m256d kseedsl_v = _mm256_mul_pd(sigmal_v, inv_v);
+				__m256d kseedsa_v = _mm256_mul_pd(sigmaa_v, inv_v);
+				__m256d kseedsb_v = _mm256_mul_pd(sigmab_v, inv_v);
+				__m256d kseedsx_v = _mm256_mul_pd(sigmax_v, inv_v);
+				__m256d kseedsy_v = _mm256_mul_pd(sigmay_v, inv_v);
+				_mm256_storeu_pd(&kseedsl[k], kseedsl_v);
+				_mm256_storeu_pd(&kseedsa[k], kseedsa_v);
+				_mm256_storeu_pd(&kseedsb[k], kseedsb_v);
+				_mm256_storeu_pd(&kseedsx[k], kseedsx_v);
+				_mm256_storeu_pd(&kseedsy[k], kseedsy_v);
 			}
-			//__m256d kseedsl_v = _mm256_load_pd(kseedsl);
 		}
 	}
 }
