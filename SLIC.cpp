@@ -125,7 +125,23 @@ void SLIC::RGB2LAB(const int& sR, const int& sG, const int& sB, double& lval, do
 	// sRGB to XYZ conversion
 	//------------------------
 	double X, Y, Z;
-	RGB2XYZ(sR, sG, sB, X, Y, Z);
+
+	double R = sR/255.0;
+	double G = sG/255.0;
+	double B = sB/255.0;
+
+	double r, g, b;
+
+	if(R <= 0.04045)	r = R/12.92;
+	else				r = pow((R+0.055)/1.055,2.4);
+	if(G <= 0.04045)	g = G/12.92;
+	else				g = pow((G+0.055)/1.055,2.4);
+	if(B <= 0.04045)	b = B/12.92;
+	else				b = pow((B+0.055)/1.055,2.4);
+
+	X = r*0.4124564 + g*0.3575761 + b*0.1804375;
+	Y = r*0.2126729 + g*0.7151522 + b*0.0721750;
+	Z = r*0.0193339 + g*0.1191920 + b*0.9503041;
 
 	//------------------------
 	// XYZ to LAB conversion
@@ -165,14 +181,50 @@ void SLIC::DoRGBtoLABConversion(
 {
 	int sz = m_width*m_height;
 	labvec = new lab[sz];
+	double epsilon = 0.008856;	//actual CIE standard
+	double kappa   = 903.3;		//actual CIE standard
 
+	double Xr = 0.950456;	//reference white
+	double Yr = 1.0;		//reference white
+	double Zr = 1.088754;	//reference white
+	#pragma omp parallel for simd
 	for( int j = 0; j < sz; j++ )
 	{
-		int r = (ubuff[j] >> 16) & 0xFF;
-		int g = (ubuff[j] >>  8) & 0xFF;
-		int b = (ubuff[j]      ) & 0xFF;
+		int sR = (ubuff[j] >> 16) & 0xFF;
+		int sG = (ubuff[j] >>  8) & 0xFF;
+		int sB = (ubuff[j]      ) & 0xFF;
+		double R = sR/255.0;
+		double G = sG/255.0;
+		double B = sB/255.0;
 
-		RGB2LAB( r, g, b, labvec[j].l, labvec[j].a, labvec[j].b );
+		double r, g, b;
+
+		if(R <= 0.04045)	r = R/12.92;
+		else				r = pow((R+0.055)/1.055,2.4);
+		if(G <= 0.04045)	g = G/12.92;
+		else				g = pow((G+0.055)/1.055,2.4);
+		if(B <= 0.04045)	b = B/12.92;
+		else				b = pow((B+0.055)/1.055,2.4);
+
+		double xr = (r*0.4124564 + g*0.3575761 + b*0.1804375) / Xr;
+		double yr = (r*0.2126729 + g*0.7151522 + b*0.0721750) / Yr;
+		double zr = (r*0.0193339 + g*0.1191920 + b*0.9503041) / Zr;
+
+		//------------------------
+		// XYZ to LAB conversion
+		//------------------------
+
+		double fx, fy, fz;
+		if(xr > epsilon)	fx = pow(xr, 1.0/3.0);
+		else				fx = (kappa*xr + 16.0)/116.0;
+		if(yr > epsilon)	fy = pow(yr, 1.0/3.0);
+		else				fy = (kappa*yr + 16.0)/116.0;
+		if(zr > epsilon)	fz = pow(zr, 1.0/3.0);
+		else				fz = (kappa*zr + 16.0)/116.0;
+
+		labvec[j].l = 116.0*fy-16.0;
+		labvec[j].a = 500.0*(fx-fy);
+		labvec[j].b = 200.0*(fy-fz);
 	}
 }
 
@@ -353,7 +405,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 	// vector<double> maxxy(numk, STEP*STEP);//THIS IS THE VARIABLE VALUE OF M, just start with 10
 
 	double invxywt = 1.0/(STEP*STEP);//NOTE: this is different from how usual SLIC/LKM works
-
 	while( numitr < NUMITR )
 	{
 		//------
@@ -437,15 +488,15 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		}
 
 		{
-			#pragma omp parallel for schedule(dynamic, 1)
+			#pragma omp simd
 			for( int k = 0; k < numk; k++ )
 		{
 			//_ASSERT(clustersize[k] > 0);
 			if( clustersize[k] <= 0 ) clustersize[k] = 1;
 			inv[k] = 1.0/double(clustersize[k]);//computing inverse now to multiply, than divide later
 		}}
-		
-		
+
+
 		{	
 			#pragma omp simd
 			for( int k = 0; k < numk; k++ )
@@ -631,6 +682,7 @@ void SLIC::PerformSLICO_ForGivenK(
 	//if(0 == klabels) klabels = new int[sz];
 	for( int s = 0; s < sz; s++ ) klabels[s] = -1;
 	//--------------------------------------------------
+	auto startTime = Clock::now();
 	if(1)//LAB
 	{
 		DoRGBtoLABConversion(ubuff, m_labvec);
@@ -646,18 +698,33 @@ void SLIC::PerformSLICO_ForGivenK(
 		}
 	}
 	//--------------------------------------------------
-
+	auto endTime = Clock::now();
+    auto compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
+	cout << compTime.count() << endl;
 	bool perturbseeds(true);
 	vector<double> edgemag(0);
+	
+	startTime = Clock::now();
 	if(perturbseeds) DetectLabEdges(m_labvec, m_width, m_height, edgemag);
 	GetLABXYSeeds_ForGivenK(kseeds, K, perturbseeds, edgemag);
+	endTime = Clock::now();
+    compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
+	cout << compTime.count() << endl;
 
+	startTime = Clock::now();
 	int STEP = sqrt(double(sz)/double(K)) + 2.0;//adding a small value in the even the STEP size is too small.
 	PerformSuperpixelSegmentation_VariableSandM(kseeds, klabels,STEP,10);
 	numlabels = kseeds.size();
+	endTime = Clock::now();
+    compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
+	cout << compTime.count() << endl;
 
+	startTime = Clock::now();
 	int* nlabels = new int[sz];
 	EnforceLabelConnectivity(klabels, m_width, m_height, nlabels, numlabels, K);
+	endTime = Clock::now();
+    compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
+	cout << compTime.count() << endl;
 	{for(int i = 0; i < sz; i++ ) klabels[i] = nlabels[i];}
 	if(nlabels) delete [] nlabels;
 }
@@ -792,6 +859,7 @@ int main (int argc, char **argv)
 	m_spcount = 200;
 	m_compactness = 10.0;
     auto startTime = Clock::now();
+	// cout << "start" << endl;
 	slic.PerformSLICO_ForGivenK(img, width, height, labels, numlabels, m_spcount, m_compactness);//for a given number K of superpixels
     auto endTime = Clock::now();
     auto compTime = chrono::duration_cast<chrono::microseconds>(endTime - startTime);
