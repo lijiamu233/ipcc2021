@@ -215,11 +215,11 @@ void SLIC::DoRGBtoLABConversion(
 		//------------------------
 
 		double fx, fy, fz;
-		if(xr > epsilon)	fx = pow(xr, 1.0/3.0);
+		if(xr > epsilon)	fx = cbrt(xr);
 		else				fx = (kappa*xr + 16.0)/116.0;
-		if(yr > epsilon)	fy = pow(yr, 1.0/3.0);
+		if(yr > epsilon)	fy = cbrt(yr);
 		else				fy = (kappa*yr + 16.0)/116.0;
-		if(zr > epsilon)	fz = pow(zr, 1.0/3.0);
+		if(zr > epsilon)	fz = cbrt(zr);
 		else				fz = (kappa*zr + 16.0)/116.0;
 
 		labvec[j].l = 116.0*fy-16.0;
