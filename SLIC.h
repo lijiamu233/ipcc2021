@@ -30,6 +30,20 @@
 #include <algorithm>
 using namespace std;
 
+struct labxy {
+	double l, a, b;
+	double x, y;
+	labxy(double l, double a, double b, double x, double y) {
+		this->l = l, this->a = a, this->b = b, this->x = x, this->y = y;
+	}
+	labxy() {
+		l = a = b = x = y = 0;
+	};
+};
+
+struct lab {
+	double l, a, b;
+};
 
 class SLIC  
 {
@@ -65,11 +79,7 @@ private:
 	// SLICO (SLIC Zero) varies only M dynamicaly, not S.
 	//============================================================================
 	void PerformSuperpixelSegmentation_VariableSandM(
-		vector<double>&				kseedsl,
-		vector<double>&				kseedsa,
-		vector<double>&				kseedsb,
-		vector<double>&				kseedsx,
-		vector<double>&				kseedsy,
+		vector<labxy>&				kseeds,
 		int*						klabels,
 		const int&					STEP,
 		const int&					NUMITR);
@@ -78,11 +88,7 @@ private:
 	// Pick seeds for superpixels when number of superpixels is input.
 	//============================================================================
 	void GetLABXYSeeds_ForGivenK(
-		vector<double>&				kseedsl,
-		vector<double>&				kseedsa,
-		vector<double>&				kseedsb,
-		vector<double>&				kseedsx,
-		vector<double>&				kseedsy,
+		vector<labxy>&				kseeds,
 		const int&					STEP,
 		const bool&					perturbseeds,
 		const vector<double>&		edges);
@@ -91,20 +97,14 @@ private:
 	// Move the seeds to low gradient positions to avoid putting seeds at region boundaries.
 	//============================================================================
 	void PerturbSeeds(
-		vector<double>&				kseedsl,
-		vector<double>&				kseedsa,
-		vector<double>&				kseedsb,
-		vector<double>&				kseedsx,
-		vector<double>&				kseedsy,
+		vector<labxy>&				kseeds,
 		const vector<double>&		edges);
 	
 	//============================================================================
 	// Detect color edges, to help PerturbSeeds()
 	//============================================================================
 	void DetectLabEdges(
-		const double*				lvec,
-		const double*				avec,
-		const double*				bvec,
+		const lab*				    labvec,
 		const int&					width,
 		const int&					height,
 		vector<double>&				edges);
@@ -136,9 +136,7 @@ private:
 	//============================================================================
 	void DoRGBtoLABConversion(
 		const unsigned int*&		ubuff,
-		double*&					lvec,
-		double*&					avec,
-		double*&					bvec);
+		lab*&					labvec);
 
 	//============================================================================
 	// Post-processing of SLIC segmentation, to avoid stray labels.
@@ -156,9 +154,7 @@ private:
 	int										m_height;
 	int										m_depth;
 
-	double*									m_lvec;
-	double*									m_avec;
-	double*									m_bvec;
+	lab*									m_labvec;
 
 	double**								m_lvecvec;
 	double**								m_avecvec;
