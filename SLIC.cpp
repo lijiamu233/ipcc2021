@@ -25,11 +25,13 @@
 #include <cfloat>
 #include <cmath>
 #include <iostream>
+#include <cstring>
 #include <fstream>
 #include "SLIC.h"
 #include <chrono>
 #include <omp.h>
 #include <immintrin.h>
+using namespace std;
 
 typedef chrono::high_resolution_clock Clock;
 
@@ -344,11 +346,11 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 	*/
 	vector<int> clustersize(numk, 0);
 	vector<double> inv(numk, 0);//to store 1/clustersize[k] values
-	vector<double> distxy(sz, DBL_MAX);
-	vector<double> distlab(sz, DBL_MAX);
-	vector<double> distvec(sz, DBL_MAX);
-	vector<double> maxlab(numk, 10*10);//THIS IS THE VARIABLE VALUE OF M, just start with 10
-	vector<double> maxxy(numk, STEP*STEP);//THIS IS THE VARIABLE VALUE OF M, just start with 10
+	vector<dist_t> dist(sz);
+	vector<double> distvec(sz);
+	vector<max_t> maxv(numk, {double(10 * 10), double(STEP * STEP)});
+	// vector<double> maxlab(numk, 10*10);//THIS IS THE VARIABLE VALUE OF M, just start with 10
+	// vector<double> maxxy(numk, STEP*STEP);//THIS IS THE VARIABLE VALUE OF M, just start with 10
 
 	double invxywt = 1.0/(STEP*STEP);//NOTE: this is different from how usual SLIC/LKM works
 
@@ -358,9 +360,8 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		//cumerr = 0;
 		numitr++;
 		//------
-
-		distvec.assign(sz, DBL_MAX);
-		
+		memset(&distvec[0], 0x7f, sizeof(double) * sz);
+		// distvec.assign(sz, DBL_MAX);
 		for( int n = 0; n < numk; n++ )
 		{
 			int y1 = max(0,			(int)(kseeds[n].y-offset));
@@ -379,20 +380,22 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 					double a = m_labvec[i].a;
 					double b = m_labvec[i].b;
 
-					distlab[i] =	(l - kseeds[n].l)*(l - kseeds[n].l) +
+					dist[i].lab =	(l - kseeds[n].l)*(l - kseeds[n].l) +
 									(a - kseeds[n].a)*(a - kseeds[n].a) +
 									(b - kseeds[n].b)*(b - kseeds[n].b);
 
-					distxy[i] =		(x - kseeds[n].x)*(x - kseeds[n].x) +
+					dist[i].xy =		(x - kseeds[n].x)*(x - kseeds[n].x) +
 									(y - kseeds[n].y)*(y - kseeds[n].y);
 					//------------------------------------------------------------------------
-					double dist = distlab[i]/maxlab[n] + distxy[i]*invxywt;//only varying m, prettier superpixels
+					double distv = dist[i].lab/maxv[n].lab + dist[i].xy*invxywt;//only varying m, prettier superpixels
 					//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
 					//------------------------------------------------------------------------
-					
-					if( dist < distvec[i] )
+					if (distv > 10000) {
+						cout << distv << endl;
+					}
+					if( distv < distvec[i] )
 					{
-						distvec[i] = dist;
+						distvec[i] = distv;
 						klabels[i]  = n;
 					}
 				}
@@ -403,16 +406,15 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		//-----------------------------------------------------------------
 		if(0 == numitr)
 		{
-			maxlab.assign(numk,1);
-			maxxy.assign(numk,1);
+			maxv.assign(numk,{1.0, 1.0});
 		}
 		{
 			//#pragma omp parallel for schedule(dynamic, 1)
 			for( int i = 0; i < sz; i++ )
 			{
 				int temp = klabels[i];
-				if(maxlab[temp] < distlab[i]) maxlab[temp] = distlab[i];
-				if(maxxy[temp] < distxy[i]) maxxy[temp] = distxy[i];
+				if(maxv[temp].lab < dist[i].lab) maxv[temp].lab = dist[i].lab;
+				if(maxv[temp].xy < dist[i].xy) maxv[temp].xy = dist[i].xy;
 			}
 		}
 		//-----------------------------------------------------------------

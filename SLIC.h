@@ -45,6 +45,14 @@ struct lab {
 	double l, a, b;
 };
 
+struct dist_t {
+	double xy, lab;
+};
+
+struct max_t {
+	double lab, xy;
+};
+
 class SLIC  
 {
 public:
