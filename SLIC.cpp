@@ -400,7 +400,7 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 	vector<double> inv(numk, 0);//to store 1/clustersize[k] values
 	vector<dist_t> dist(sz);
 	vector<double> distvec(sz);
-	vector<max_t> maxv(numk, {double(10 * 10), double(STEP * STEP)});
+	vector<double> maxlab(numk, double(100));
 	// vector<double> maxlab(numk, 10*10);//THIS IS THE VARIABLE VALUE OF M, just start with 10
 	// vector<double> maxxy(numk, STEP*STEP);//THIS IS THE VARIABLE VALUE OF M, just start with 10
 
@@ -430,25 +430,23 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 					double l = m_labvec[i].l;
 					double a = m_labvec[i].a;
 					double b = m_labvec[i].b;
-
-					dist[i].lab =	(l - kseeds[n].l)*(l - kseeds[n].l) +
+					double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
 									(a - kseeds[n].a)*(a - kseeds[n].a) +
 									(b - kseeds[n].b)*(b - kseeds[n].b);
-
-					dist[i].xy =		(x - kseeds[n].x)*(x - kseeds[n].x) +
-									(y - kseeds[n].y)*(y - kseeds[n].y);
+					double xy = (x - kseeds[n].x)*(x - kseeds[n].x) +
+									(y - kseeds[n].y)*(y - kseeds[n].y);							
 					//------------------------------------------------------------------------
-					double distv = dist[i].lab/maxv[n].lab + dist[i].xy*invxywt;//only varying m, prettier superpixels
+					double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
 					//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
 					//------------------------------------------------------------------------
-					if (distv > 10000) {
-						cout << distv << endl;
-					}
+					dist[i].lab = lab;
+					dist[i].xy = xy;
 					if( distv < distvec[i] )
 					{
 						distvec[i] = distv;
 						klabels[i]  = n;
 					}
+
 				}
 			}
 		}
@@ -457,15 +455,14 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		//-----------------------------------------------------------------
 		if(0 == numitr)
 		{
-			maxv.assign(numk,{1.0, 1.0});
+			maxlab.assign(numk, 1.0);
 		}
 		{
 			//#pragma omp parallel for schedule(dynamic, 1)
 			for( int i = 0; i < sz; i++ )
 			{
 				int temp = klabels[i];
-				if(maxv[temp].lab < dist[i].lab) maxv[temp].lab = dist[i].lab;
-				if(maxv[temp].xy < dist[i].xy) maxv[temp].xy = dist[i].xy;
+				if(maxlab[temp] < dist[i].lab) maxlab[temp] = dist[i].lab;
 			}
 		}
 		//-----------------------------------------------------------------

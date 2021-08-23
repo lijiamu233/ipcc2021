@@ -1,6 +1,6 @@
 CC=gcc
 CXX=g++
-CFLAGS=-I. -O3 -g -march=native -mtune=native -fopenmp -Wall
+CFLAGS=-I. -O3 -g -mavx2 -fopenmp -Wall
 DEPS = SLIC.h Makefile
 OBJ = SLIC.o
 
