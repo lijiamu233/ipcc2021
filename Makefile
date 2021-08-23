@@ -1,7 +1,7 @@
 CC=gcc
 CXX=g++
-CFLAGS=-I. -O2
-DEPS = SLIC.h
+CFLAGS=-I. -O3 -g -march=native -mtune=native -fopenmp
+DEPS = SLIC.h Makefile
 OBJ = SLIC.o
 
 %.o: %.c $(DEPS)
