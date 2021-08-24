@@ -47,7 +47,7 @@ struct lab {
 	double l, a, b;
 };
 constexpr int avx_width = 4;
-constexpr int vec_unroll = 4;
+constexpr int vec_unroll = 1;
 constexpr uintptr_t align_mask = 0x1f;
 constexpr uintptr_t align_rev_mask = ~align_mask;
 constexpr int vec_width = avx_width * vec_unroll;
