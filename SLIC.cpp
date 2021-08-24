@@ -187,46 +187,6 @@ void SLIC::DoRGBtoLABConversion(
 	double Xr = 0.950456;	//reference white
 	double Yr = 1.0;		//reference white
 	double Zr = 1.088754;	//reference white
-	#pragma omp parallel for simd
-	for (int j = 0; j < sz; ++j) {
-	// for (int j = sz - sz % vec_width; j < sz; ++j) {
-		int sR = (ubuff[j] >> 16) & 0xFF;
-		int sG = (ubuff[j] >>  8) & 0xFF;
-		int sB = (ubuff[j]      ) & 0xFF;
-		double R = sR/255.0;
-		double G = sG/255.0;
-		double B = sB/255.0;
-
-		double r, g, b;
-
-		if(R <= 0.04045)	r = R/12.92;
-		else				r = pow((R+0.055)/1.055,2.4);
-		if(G <= 0.04045)	g = G/12.92;
-		else				g = pow((G+0.055)/1.055,2.4);
-		if(B <= 0.04045)	b = B/12.92;
-		else				b = pow((B+0.055)/1.055,2.4);
-
-		double xr = (r*0.4124564 + g*0.3575761 + b*0.1804375) / Xr;
-		double yr = (r*0.2126729 + g*0.7151522 + b*0.0721750) / Yr;
-		double zr = (r*0.0193339 + g*0.1191920 + b*0.9503041) / Zr;
-
-		//------------------------
-		// XYZ to LAB conversion
-		//------------------------
-
-		double fx, fy, fz;
-		if(xr > epsilon)	fx = cbrt(xr);
-		else				fx = (kappa*xr + 16.0)/116.0;
-		if(yr > epsilon)	fy = cbrt(yr);
-		else				fy = (kappa*yr + 16.0)/116.0;
-		if(zr > epsilon)	fz = cbrt(zr);
-		else				fz = (kappa*zr + 16.0)/116.0;
-
-		labvec[j / vec_width].l[j % vec_width] = 116.0*fy-16.0;
-		labvec[j / vec_width].a[j % vec_width] = 500.0*(fx-fy);
-		labvec[j / vec_width].b[j % vec_width] = 200.0*(fy-fz);
-	}
-	return;
 	#pragma omp parallel for
 	for( int j = 0; j < sz; j += vec_width)
 	{
@@ -452,7 +412,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 	// vector<double> maxxy(numk, STEP*STEP);//THIS IS THE VARIABLE VALUE OF M, just start with 10
 
 	double invxywt = 1.0/(STEP*STEP);//NOTE: this is different from how usual SLIC/LKM works
-	__m256d vinvxywt = _mm256_set1_pd(invxywt);
 	while( numitr < NUMITR )
 	{
 		//------
@@ -467,27 +426,11 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 			int y2 = min(m_height,	(int)(kseeds[n].y+offset));
 			int x1 = max(0,			(int)(kseeds[n].x-offset));
 			int x2 = min(m_width,	(int)(kseeds[n].x+offset));
-			__m256d vseedsl, vseedsa, vseedsb, vseedsx, vseedsy, vmaxlab;
-			vseedsl = _mm256_set1_pd(kseeds[n].l);
-			vseedsa = _mm256_set1_pd(kseeds[n].a);
-			vseedsb = _mm256_set1_pd(kseeds[n].b);
-			vseedsx = _mm256_set1_pd(kseeds[n].x);
-			vseedsy = _mm256_set1_pd(kseeds[n].y);
-			vmaxlab = _mm256_set1_pd(maxlab[n]);
 			// #pragma omp parallel for
 			for( int y = y1; y < y2; y++ )
 			{
-				// uintptr_t start = (uintptr_t)&m_labvec[(y * m_width + x1) / vec_width].l[(y * m_width + x1) % vec_width];
-				// uintptr_t aligned_start = (start & align_mask) ? (start & align_rev_mask) + 32 : start;
 				ptrdiff_t start_offset = (y * m_width + x1) % vec_width == 0 ? 0 : vec_width - (y * m_width + x1) % vec_width;
-				// uintptr_t end = (uintptr_t)&m_labvec[(y * m_width + x2) / vec_width].l[(y * m_width + x2) % vec_width];
-				// uintptr_t aligned_end = end & align_rev_mask;
-				// cout << end << ' ' << aligned_end << endl;
 				ptrdiff_t end_offset = (y * m_width + x2) % vec_width;
-				// cout << start_offset << ' ' << end_offset << endl;
-				// for (int x = x1; x < x2; ++x) {
-				// printf("%x %x\n", start, aligned_start);
-				// cout << y * m_width + x1 + start_offset << ' ' << y * m_width + x2 - end_offset << endl;
 				for (int x = x1; x < start_offset + x1; ++x) {
 					int i = y*m_width + x;
 					double l = m_labvec[i / vec_width].l[i % vec_width];
@@ -510,94 +453,31 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 						klabels[i]  = n;
 					}
 				}
-				__m256d vy = _mm256_set1_pd(double(y));
-				// if ((x2 - end_offset - x1 - start_offset + 1) % vec_width != 0) {
-				// 	cout << x2 - end_offset - x1 - start_offset + 1 << endl;;
-				// }
 				#pragma omp parallel for
 				for(int x = x1 + start_offset; x < x2 - end_offset; x += vec_width )
 				{
-					for (int t = 0; t < vec_width; t += avx_width) {
+					#pragma omp simd
+					for (int t = 0; t < vec_width; t++) {
 						int i = y*m_width + x + t;
-						__m256d vl, va, vb, vx;
-						__m256d vlab, vxy, vdistv;
-						vl = _mm256_load_pd(&m_labvec[i / vec_width].l[t]);
-						// double l = m_labvec[i / vec_width].l[i % vec_width];
-						va = _mm256_load_pd(&m_labvec[i / vec_width].a[t]);
-						// double a = m_labvec[i / vec_width].a[i % vec_width];
-						vb = _mm256_load_pd(&m_labvec[i / vec_width].b[t]);
-						// double b = m_labvec[i / vec_width].b[i % vec_width];
-						vx = _mm256_set_pd(double(x + t), double(x + t + 1), double(x + t + 2), double(x + t + 3));
-						vlab = _mm256_fmadd_pd(
-							_mm256_sub_pd(vb, vseedsb), 
-							_mm256_sub_pd(vb, vseedsb),
-							_mm256_fmadd_pd(
-								_mm256_sub_pd(va, vseedsa), 
-								_mm256_sub_pd(va, vseedsa), 
-								_mm256_mul_pd(
-									_mm256_sub_pd(vl, vseedsl), 
-									_mm256_sub_pd(vl, vseedsl)
-						)));
-						// double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
-										// (a - kseeds[n].a)*(a - kseeds[n].a) +
-										// (b - kseeds[n].b)*(b - kseeds[n].b);
-						vxy = _mm256_fmadd_pd(
-							_mm256_sub_pd(vx, vseedsx),
-							_mm256_sub_pd(vx, vseedsx),
-							_mm256_mul_pd(
-								_mm256_sub_pd(vy, vseedsy),
-								_mm256_sub_pd(vy, vseedsy)
-						));
-						// double xy = (x - kseeds[n].x)*(x - kseeds[n].x) +
-										// (y - kseeds[n].y)*(y - kseeds[n].y);							
+						double l = m_labvec[i / vec_width].l[i % vec_width];
+						double a = m_labvec[i / vec_width].a[i % vec_width];
+						double b = m_labvec[i / vec_width].b[i % vec_width];
+						double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
+										(a - kseeds[n].a)*(a - kseeds[n].a) +
+										(b - kseeds[n].b)*(b - kseeds[n].b);
+						double xy = ((x + t) - kseeds[n].x)*((x + t) - kseeds[n].x) +
+										(y - kseeds[n].y)*(y - kseeds[n].y);							
 						//------------------------------------------------------------------------
-						vdistv = _mm256_fmadd_pd(
-							vxy,
-							vinvxywt,
-							_mm256_div_pd(vlab, vmaxlab)
-						);
-						// double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
+						double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
 						//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
 						//------------------------------------------------------------------------
-						_mm256_store_pd(&dist[i / vec_width].lab[t], vlab);
-						// dist[i].lab = lab;
-						_mm256_store_pd(&dist[i / vec_width].xy[t], vxy);
-						alignas(32) double distv_res[4];
-						_mm256_store_pd(distv_res, vdistv);
-						if (distv_res[0] < distvec[i]) {
-							klabels[i] = n;
-							distvec[i] = distv_res[0];
+						dist[i / vec_width].lab[i % vec_width] = lab;
+						dist[i / vec_width].xy[i % vec_width] = xy;
+						if( distv < distvec[i] )
+						{
+							distvec[i] = distv;
+							klabels[i]  = n;
 						}
-						if (distv_res[1] < distvec[i + 1]) {
-							klabels[i + 1] = n;
-							distvec[i + 1] = distv_res[1];
-						}
-						if (distv_res[2] < distvec[i + 2]) {
-							klabels[i + 2] = n;
-							distvec[i + 2] = distv_res[2];
-						}
-						if (distv_res[3] < distvec[i + 3]) {
-							klabels[i + 3] = n;
-							distvec[i + 3] = distv_res[3];
-						}
-						// dist[i].xy = xy;
-						// __m256d mask = _mm256_cmp_pd(vdistv, _mm256_loadu_pd(&distvec[i]), _CMP_NGE_UQ);
-						// _mm256_maskstore_pd(&distvec[i], _mm256_castpd_si256( mask), vdistv);
-						// int imask = _mm256_movemask_pd(mask);
-						// if(imask & 0b0001)
-						// {
-						// 	klabels[i]  = n;
-						// }
-						// if(imask & 0b0010) {
-						// 	klabels[i + 1] = n;
-						// }
-						// if(imask & 0b0100)
-						// {
-						// 	klabels[i + 2]  = n;
-						// }
-						// if(imask & 0b1000) {
-						// 	klabels[i + 3] = n;
-						// }
 					}
 				}
 
