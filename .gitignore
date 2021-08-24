@@ -87,3 +87,5 @@ Module.symvers
 Mkfile.old
 dkms.conf
 *.ppm
+.ccls-cache
+.vscode

@@ -28,6 +28,8 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <immintrin.h>
+#include <cinttypes>
 using namespace std;
 
 struct labxy {
@@ -44,13 +46,21 @@ struct labxy {
 struct lab {
 	double l, a, b;
 };
+constexpr int avx_width = 4;
+constexpr int vec_unroll = 4;
+constexpr uintptr_t align_mask = 0x1f;
+constexpr uintptr_t align_rev_mask = ~align_mask;
+constexpr int vec_width = avx_width * vec_unroll;
+struct vec_lab {
+ 	double l[vec_width], a[vec_width], b[vec_width];
+};
+
+struct vec_dist {
+	double lab[vec_width], xy[vec_width];
+};
 
 struct dist_t {
 	double xy, lab;
-};
-
-struct max_t {
-	double lab, xy;
 };
 
 class SLIC  
@@ -112,7 +122,7 @@ private:
 	// Detect color edges, to help PerturbSeeds()
 	//============================================================================
 	void DetectLabEdges(
-		const lab*				    labvec,
+		const vec_lab*				labvec,
 		const int&					width,
 		const int&					height,
 		vector<double>&				edges);
@@ -144,7 +154,7 @@ private:
 	//============================================================================
 	void DoRGBtoLABConversion(
 		const unsigned int*&		ubuff,
-		lab*&					labvec);
+		vec_lab*&					labvec);
 
 	//============================================================================
 	// Post-processing of SLIC segmentation, to avoid stray labels.
@@ -162,7 +172,7 @@ private:
 	int										m_height;
 	int										m_depth;
 
-	lab*									m_labvec;
+	vec_lab*								m_labvec;
 
 	double**								m_lvecvec;
 	double**								m_avecvec;

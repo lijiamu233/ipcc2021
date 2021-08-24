@@ -1,6 +1,6 @@
 CC=gcc
 CXX=g++
-CFLAGS=-I. -O3 -g -mavx2 -fopenmp -Wall
+CFLAGS=-I. -O3 -g -mavx2 -fopenmp -mfma -Wall# -fsanitize=address
 DEPS = SLIC.h Makefile
 OBJ = SLIC.o
 
