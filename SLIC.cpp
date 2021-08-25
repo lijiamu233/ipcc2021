@@ -477,7 +477,7 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 						// double a = m_labvec[i / vec_width].a[i % vec_width];
 						vb = _mm256_load_pd(&m_labvec[i / vec_width].b[t]);
 						// double b = m_labvec[i / vec_width].b[i % vec_width];
-						vx = _mm256_set_pd(double(x + t), double(x + t + 1), double(x + t + 2), double(x + t + 3));
+						vx = _mm256_set_pd(double(x + t + 3), double(x + t + 2), double(x + t + 1), double(x + t));
 						vlab = _mm256_fmadd_pd(
 							_mm256_sub_pd(vb, vseedsb), 
 							_mm256_sub_pd(vb, vseedsb),
