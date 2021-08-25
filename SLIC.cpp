@@ -191,7 +191,7 @@ void SLIC::DoRGBtoLABConversion(
 	for( int j = 0; j < sz; j += vec_width)
 	{
 		#pragma omp simd
-		for (int i = 0; i < vec_width; ++i) {
+		for (int i = 0; i < vec_width; i ++) {
 			int sR = (ubuff[j + i] >> 16) & 0xFF;
 			int sG = (ubuff[j + i] >>  8) & 0xFF;
 			int sB = (ubuff[j + i]      ) & 0xFF;
@@ -199,6 +199,9 @@ void SLIC::DoRGBtoLABConversion(
 			double G = sG/255.0;
 			double B = sB/255.0;
 
+			// __m256d drgb = _mm256_set_pd(0.0, R, G, B);
+			// __m256d drgbdiv12 = _mm256_div_pd(drgb, _mm256_set1_pd(12.92));
+			// __m256d drgbpow = _mm256_pow_pd(_mm256_fmadd_pd(drgb, _mm256_set1_pd(1.0/1.055), _mm256_set1_pd(0.05213270142180095)), _mm256_set1_pd(2.4)));
 			double r, g, b;
 
 			if(R <= 0.04045)	r = R/12.92;
@@ -378,6 +381,25 @@ void SLIC::GetLABXYSeeds_ForGivenK(
 /// SLICO (or SLIC Zero) dynamically varies only the compactness factor S,
 /// not the step size S.
 //===========================================================================
+alignas(32) int32_t lookuptable[16][4] = {
+	{0, 0, 0, 0},
+	{-1, 0, 0, 0},
+	{0, -1, 0, 0},
+	{-1, -1, 0, 0},
+	{0, 0, -1, 0},
+	{-1, 0, -1, 0},
+	{0, -1, -1, 0},
+	{-1, -1, -1, 0},
+	{0, 0, 0, -1},
+	{-1, 0, 0, -1},
+	{0, -1, 0, -1},
+	{-1, -1, 0, -1},
+	{0, 0, -1, -1},
+	{-1, 0, -1, -1},
+	{0, -1, -1, -1},
+	{-1, -1, -1, -1},
+};
+
 void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 	vector<labxy>&				kseeds,
 	int*						klabels,
@@ -466,8 +488,8 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 				// #pragma omp parallel for
 				for(int x = x1 + start_offset; x < x2 - end_offset; x += vec_width )
 				{
-					// for (int t = 0; t < vec_width; t += avx_width) {
-						int t = 0;
+					for (int t = 0; t < vec_width; t += avx_width) {
+						// int t = 0;
 						int i = y*m_width + x + t;
 						__m256d vl, va, vb, vx;
 						__m256d vlab, vxy, vdistv;
@@ -477,7 +499,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 						// double a = m_labvec[i / vec_width].a[i % vec_width];
 						vb = _mm256_load_pd(&m_labvec[i / vec_width].b[t]);
 						// double b = m_labvec[i / vec_width].b[i % vec_width];
-						vx = _mm256_set_pd(double(x + t + 3), double(x + t + 2), double(x + t + 1), double(x + t));
 						vlab = _mm256_fmadd_pd(
 							_mm256_sub_pd(vb, vseedsb), 
 							_mm256_sub_pd(vb, vseedsb),
@@ -488,6 +509,8 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 									_mm256_sub_pd(vl, vseedsl), 
 									_mm256_sub_pd(vl, vseedsl)
 						)));
+						vx = _mm256_set_pd(double(x + t + 3), double(x + t + 2), double(x + t + 1), double(x + t));
+
 						// double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
 										// (a - kseeds[n].a)*(a - kseeds[n].a) +
 										// (b - kseeds[n].b)*(b - kseeds[n].b);
@@ -499,7 +522,8 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 								_mm256_sub_pd(vy, vseedsy)
 						));
 						// double xy = (x - kseeds[n].x)*(x - kseeds[n].x) +
-										// (y - kseeds[n].y)*(y - kseeds[n].y);							
+										// (y - kseeds[n].y)*(y - kseeds[n].y);	
+						_mm256_stream_pd(&dist[i / vec_width].lab[t], vlab);						
 						//------------------------------------------------------------------------
 						vdistv = _mm256_fmadd_pd(
 							vxy,
@@ -509,28 +533,13 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 						// double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
 						//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
 						//------------------------------------------------------------------------
-						_mm256_store_pd(&dist[i / vec_width].lab[t], vlab);
 						// dist[i].lab = lab;
-						_mm256_store_pd(&dist[i / vec_width].xy[t], vxy);
-						alignas(32) double distv_res[4];
-						_mm256_store_pd(distv_res, vdistv);
-						if (distv_res[0] < distvec[i]) {
-							klabels[i] = n;
-							distvec[i] = distv_res[0];
-						}
-						if (distv_res[1] < distvec[i + 1]) {
-							klabels[i + 1] = n;
-							distvec[i + 1] = distv_res[1];
-						}
-						if (distv_res[2] < distvec[i + 2]) {
-							klabels[i + 2] = n;
-							distvec[i + 2] = distv_res[2];
-						}
-						if (distv_res[3] < distvec[i + 3]) {
-							klabels[i + 3] = n;
-							distvec[i + 3] = distv_res[3];
-						}
-					// }
+						_mm256_stream_pd(&dist[i / vec_width].xy[t], vxy);
+						__m256d mask = _mm256_cmp_pd(vdistv, _mm256_load_pd(distvec + i), _CMP_NGE_UQ);
+						int imask = _mm256_movemask_pd(mask);
+						_mm_maskstore_epi32(klabels + i, _mm_load_si128((__m128i *)(void*)(lookuptable + imask)), _mm_set1_epi32(n));
+						_mm256_maskstore_pd(distvec + i, (__m256i)_mm256_castpd_ps(mask), vdistv);
+					}
 				}
 
 				for (int x = x2 - end_offset; x < x2; ++x) {
