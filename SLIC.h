@@ -55,10 +55,6 @@ struct vec_lab {
  	double l[vec_width], a[vec_width], b[vec_width];
 };
 
-struct vec_dist {
-	double lab[vec_width], xy[vec_width];
-};
-
 struct dist_t {
 	double xy, lab;
 };

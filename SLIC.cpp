@@ -426,7 +426,7 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 	*/
 	vector<int> clustersize(numk, 0);
 	vector<double> inv(numk, 0);//to store 1/clustersize[k] values
-	vec_dist* dist = (vec_dist *)_mm_malloc(sizeof(vec_dist) * (sz / vec_width + 1), 32);
+	double* dist = (double *)_mm_malloc(sizeof(double) * sz, 32);
 	// vector<vec_dist> dist(sz);
 	double* distvec = (double *)_mm_malloc(sizeof(double) * (sz), 32);
 	vector<double> maxlab(numk, double(100));
@@ -450,14 +450,7 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 			int y2 = min(m_height,	(int)(kseeds[n].y+offset));
 			int x1 = max(0,			(int)(kseeds[n].x-offset));
 			int x2 = min(m_width,	(int)(kseeds[n].x+offset));
-			// #pragma omp parallel for
-			__m256d vseedsl, vseedsa, vseedsb, vseedsx, vseedsy, vmaxlab;
-			vseedsl = _mm256_set1_pd(kseeds[n].l);
-			vseedsa = _mm256_set1_pd(kseeds[n].a);
-			vseedsb = _mm256_set1_pd(kseeds[n].b);
-			vseedsx = _mm256_set1_pd(kseeds[n].x);
-			vseedsy = _mm256_set1_pd(kseeds[n].y);
-			vmaxlab = _mm256_set1_pd(maxlab[n]);
+
 			for( int y = y1; y < y2; y++ )
 			{
 				ptrdiff_t start_offset = (y * m_width + x1) % vec_width == 0 ? 0 : vec_width - (y * m_width + x1) % vec_width;
@@ -476,14 +469,20 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 					double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
 					//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
 					//------------------------------------------------------------------------
-					dist[i / vec_width].lab[i % vec_width] = lab;
-					dist[i / vec_width].xy[i % vec_width] = xy;
+					dist[i] = lab;
 					if( distv < distvec[i] )
 					{
 						distvec[i] = distv;
 						klabels[i]  = n;
 					}
 				}
+				__m256d vseedsl, vseedsa, vseedsb, vseedsx, vseedsy, vmaxlab;
+				vseedsl = _mm256_set1_pd(kseeds[n].l);
+				vseedsa = _mm256_set1_pd(kseeds[n].a);
+				vseedsb = _mm256_set1_pd(kseeds[n].b);
+				vseedsx = _mm256_set1_pd(kseeds[n].x);
+				vseedsy = _mm256_set1_pd(kseeds[n].y);
+				vmaxlab = _mm256_set1_pd(maxlab[n]);
 				__m256d vy = _mm256_set1_pd(double(y));
 				// #pragma omp parallel for
 				for(int x = x1 + start_offset; x < x2 - end_offset; x += vec_width )
@@ -523,7 +522,7 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 						));
 						// double xy = (x - kseeds[n].x)*(x - kseeds[n].x) +
 										// (y - kseeds[n].y)*(y - kseeds[n].y);	
-						_mm256_stream_pd(&dist[i / vec_width].lab[t], vlab);						
+						_mm256_stream_pd(&dist[i], vlab);						
 						//------------------------------------------------------------------------
 						vdistv = _mm256_fmadd_pd(
 							vxy,
@@ -534,7 +533,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 						//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
 						//------------------------------------------------------------------------
 						// dist[i].lab = lab;
-						_mm256_stream_pd(&dist[i / vec_width].xy[t], vxy);
 						__m256d mask = _mm256_cmp_pd(vdistv, _mm256_load_pd(distvec + i), _CMP_NGE_UQ);
 						int imask = _mm256_movemask_pd(mask);
 						_mm_maskstore_epi32(klabels + i, _mm_load_si128((__m128i *)(void*)(lookuptable + imask)), _mm_set1_epi32(n));
@@ -557,8 +555,7 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 					double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
 					//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
 					//------------------------------------------------------------------------
-					dist[i / vec_width].lab[i % vec_width] = lab;
-					dist[i / vec_width].xy[i % vec_width] = xy;
+					dist[i] = lab;
 					if( distv < distvec[i] )
 					{
 						distvec[i] = distv;
@@ -584,8 +581,8 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		for( int j = 0; j < sz; j++ )
 		{
 			int temp = klabels[j];
-			if(maxlab[temp] < dist[j / vec_width].lab[j % vec_width]) 
-			maxlab[temp] = dist[j / vec_width].lab[j % vec_width];
+			if(maxlab[temp] < dist[j]) 
+				maxlab[temp] = dist[j];
 			//_ASSERT(klabels[j] >= 0);
 			sigma[temp].l += m_labvec[j / vec_width].l[j % vec_width];
 			sigma[temp].a += m_labvec[j / vec_width].a[j % vec_width];
