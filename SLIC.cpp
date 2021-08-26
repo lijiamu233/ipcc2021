@@ -28,6 +28,8 @@
 #include <cstring>
 #include <fstream>
 #include "SLIC.h"
+#include <memory>
+#include <atomic>
 #include <chrono>
 #include <omp.h>
 #include <immintrin.h>
@@ -442,20 +444,30 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		//cumerr = 0;
 		numitr++;
 		//------
+		atomic<int> current_commmited(0);
 		memset(&distvec[0], 0x7f, sizeof(double) * sz);
-		// distvec.assign(sz, DBL_MAX);
+		double *dist_buffers[omp_get_max_threads()];
+		double *dist_vec_buffers[omp_get_max_threads()];
+		int *klables_buffer[omp_get_max_threads()];
+		for (int n = 0; n < omp_get_max_threads(); ++n) {
+			dist_buffers[n] = (double*)_mm_malloc(4 * offset * offset * sizeof(double), 32);
+			dist_vec_buffers[n] = (double*)_mm_malloc(4 * offset * offset * sizeof(double), 32);
+		}
+		#pragma omp parallel for schedule(dynamic, 1)
 		for( int n = 0; n < numk; n++ )
 		{
+			int id = omp_get_thread_num();
 			int y1 = max(0,			(int)(kseeds[n].y-offset));
 			int y2 = min(m_height,	(int)(kseeds[n].y+offset));
 			int x1 = max(0,			(int)(kseeds[n].x-offset));
 			int x2 = min(m_width,	(int)(kseeds[n].x+offset));
-
-			for( int y = y1; y < y2; y++ )
+			double *ldist = dist_buffers[id];
+			double *ldistvec = dist_vec_buffers[id];
+			for( int y = y1, ptr = 0; y < y2; y++ )
 			{
 				ptrdiff_t start_offset = (y * m_width + x1) % vec_width == 0 ? 0 : vec_width - (y * m_width + x1) % vec_width;
 				ptrdiff_t end_offset = (y * m_width + x2) % vec_width;
-				for (int x = x1; x < start_offset + x1; ++x) {
+				for (int x = x1; x < start_offset + x1; ++x, ++ptr) {
 					int i = y*m_width + x;
 					double l = m_labvec[i / vec_width].l[i % vec_width];
 					double a = m_labvec[i / vec_width].a[i % vec_width];
@@ -469,12 +481,8 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 					double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
 					//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
 					//------------------------------------------------------------------------
-					dist[i] = lab;
-					if( distv < distvec[i] )
-					{
-						distvec[i] = distv;
-						klabels[i]  = n;
-					}
+					ldist[ptr] = lab;
+					ldistvec[ptr] = distv;
 				}
 				__m256d vseedsl, vseedsa, vseedsb, vseedsx, vseedsy, vmaxlab;
 				vseedsl = _mm256_set1_pd(kseeds[n].l);
@@ -485,7 +493,7 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 				vmaxlab = _mm256_set1_pd(maxlab[n]);
 				__m256d vy = _mm256_set1_pd(double(y));
 				// #pragma omp parallel for
-				for(int x = x1 + start_offset; x < x2 - end_offset; x += vec_width )
+				for(int x = x1 + start_offset; x < x2 - end_offset; x += vec_width, ptr += vec_width )
 				{
 					for (int t = 0; t < vec_width; t += avx_width) {
 						// int t = 0;
@@ -509,7 +517,7 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 									_mm256_sub_pd(vl, vseedsl)
 						)));
 						vx = _mm256_set_pd(double(x + t + 3), double(x + t + 2), double(x + t + 1), double(x + t));
-
+						_mm256_storeu_pd(ldist + ptr, vlab);
 						// double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
 										// (a - kseeds[n].a)*(a - kseeds[n].a) +
 										// (b - kseeds[n].b)*(b - kseeds[n].b);
@@ -529,20 +537,22 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 							vinvxywt,
 							_mm256_div_pd(vlab, vmaxlab)
 						);
+						_mm256_storeu_pd(ldistvec + ptr, vdistv);
+						// dist[ptr] = lab;
+						// distvec[ptr] = distv;
 						// double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
 						//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
 						//------------------------------------------------------------------------
 						// dist[i].lab = lab;
-						__m256d mask = _mm256_cmp_pd(vdistv, _mm256_load_pd(distvec + i), _CMP_NGE_UQ);
-						int imask = _mm256_movemask_pd(mask);
-						_mm_maskstore_epi32(klabels + i, _mm_load_si128((__m128i *)(void*)(lookuptable + imask)), _mm_set1_epi32(n));
-						_mm256_maskstore_pd(distvec + i, (__m256i)_mm256_castpd_ps(mask), vdistv);
+						// __m256d mask = _mm256_cmp_pd(vdistv, _mm256_load_pd(distvec + i), _CMP_NGE_UQ);
+						// int imask = _mm256_movemask_pd(mask);
+						// _mm_maskstore_epi32(klabels + i, _mm_load_si128((__m128i *)(void*)(lookuptable + imask)), _mm_set1_epi32(n));
+						// _mm256_maskstore_pd(distvec + i, (__m256i)_mm256_castpd_ps(mask), vdistv);
 					}
 				}
 
-				for (int x = x2 - end_offset; x < x2; ++x) {
+				for (int x = x2 - end_offset; x < x2; ++x, ++ptr) {
 					int i = y*m_width + x;
-					//_ASSERT( y < m_height && x < m_width && y >= 0 && x >= 0 );
 					double l = m_labvec[i / vec_width].l[i % vec_width];
 					double a = m_labvec[i / vec_width].a[i % vec_width];
 					double b = m_labvec[i / vec_width].b[i % vec_width];
@@ -555,15 +565,23 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 					double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
 					//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
 					//------------------------------------------------------------------------
-					dist[i] = lab;
-					if( distv < distvec[i] )
-					{
-						distvec[i] = distv;
-						klabels[i]  = n;
+					ldist[ptr] = lab;
+					ldistvec[ptr] = distv;
+				}
+			}
+			while (current_commmited != n)
+				_mm_pause();
+			for (int y = y1, ptr = 0; y < y2; ++y) {
+				for (int x = x1; x < x2; ++x, ++ptr) {
+					int i = y*m_width + x;
+					dist[i] = ldist[ptr];
+					if (ldistvec[ptr] < distvec[i]) {
+						distvec[i] = ldistvec[ptr];
+						klabels[i] = n;
 					}
 				}
 			}
-			
+			++current_commmited;
 		}
 		//-----------------------------------------------------------------
 		// Assign the max color distance for a cluster
