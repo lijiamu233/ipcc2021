@@ -30,6 +30,8 @@
 #include <algorithm>
 #include <immintrin.h>
 #include <cinttypes>
+#include <mpi.h>
+
 using namespace std;
 
 struct labxy {
@@ -75,7 +77,8 @@ public:
 		int*						klabels,
 		int&						numlabels,
 		const int&					K,
-		const double&				m);
+		const double&				m,
+		int                         myrank);
 
 	//============================================================================
 	// Save superpixel labels to pgm in raster scan order
@@ -150,7 +153,8 @@ private:
 	//============================================================================
 	void DoRGBtoLABConversion(
 		const unsigned int*&		ubuff,
-		vec_lab*&					labvec);
+		vec_lab*&					labvec,
+		int                         myrank);
 
 	//============================================================================
 	// Post-processing of SLIC segmentation, to avoid stray labels.
@@ -162,6 +166,7 @@ private:
 		int*						nlabels,//input labels that need to be corrected to remove stray labels
 		int&						numlabels,//the number of labels changes in the end if segments are removed
 		const int&					K); //the number of superpixels desired by the user
+	void Build_mpi_type(double l_p[4], double a_p[4], double b_p[4], MPI_Datatype* mpi_lab);
 
 private:
 	int										m_width;

@@ -31,6 +31,8 @@
 #include <chrono>
 #include <omp.h>
 #include <immintrin.h>
+#include <mpi.h>
+
 using namespace std;
 
 typedef chrono::high_resolution_clock Clock;
@@ -177,7 +179,8 @@ void SLIC::RGB2LAB(const int& sR, const int& sG, const int& sB, double& lval, do
 //===========================================================================
 void SLIC::DoRGBtoLABConversion(
 	const unsigned int*&		ubuff,
-		vec_lab*&					labvec)
+	vec_lab*&					labvec,
+	int                         myrank)
 {
 	int sz = m_width*m_height;
 	labvec = (vec_lab*)_mm_malloc(sizeof(vec_lab) * (sz / vec_width + 1), 32);
@@ -187,9 +190,22 @@ void SLIC::DoRGBtoLABConversion(
 	double Xr = 0.950456;	//reference white
 	double Yr = 1.0;		//reference white
 	double Zr = 1.088754;	//reference white
-	#pragma omp parallel for
-	for( int j = 0; j < sz; j += vec_width)
+
+	int local_start, local_end, loop_nums = 0;
+	if(myrank == 0)
 	{
+		local_start = 0;
+		local_end = sz/2;
+	}
+	else
+	{
+		local_start = sz/2+1;
+		local_end = sz;
+	}
+	#pragma omp parallel for
+	for( int j = local_start; j < local_end; j += vec_width)
+	{
+		++loop_nums;
 		#pragma omp simd
 		for (int i = 0; i < vec_width; i ++) {
 			int sR = (ubuff[j + i] >> 16) & 0xFF;
@@ -231,6 +247,19 @@ void SLIC::DoRGBtoLABConversion(
 			labvec[j / vec_width].a[i] = 500.0*(fx-fy);
 			labvec[j / vec_width].b[i] = 200.0*(fy-fz);
 		}
+	}
+
+	MPI_Datatype mpi_lab;
+	vec_lab m_lab;
+	Build_mpi_type(m_lab.l, m_lab.a, m_lab.b, &mpi_lab);
+
+	if(myrank == 0)
+	{
+		MPI_Recv(labvec + local_end / vec_width + 1, (sz - local_end) / vec_width +1 , mpi_lab, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+	}
+	else
+	{
+		MPI_Send(labvec + local_start / vec_width, loop_nums, mpi_lab, 0, 0, MPI_COMM_WORLD);
 	}
 }
 
@@ -416,14 +445,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 	if(STEP < 10) offset = STEP*1.5;
 	//----------------
 	vector<labxy> sigma(numk);
-	/*
-	double *sigmal = new double[numk];
-	double *sigmaa = new double[numk];
-	double *sigmab = new double[numk];
-	double *sigmax = new double[numk];
-	double *sigmay = new double[numk];
-	double *inv = new double[numk];
-	*/
 	vector<int> clustersize(numk, 0);
 	vector<double> inv(numk, 0);//to store 1/clustersize[k] values
 	double* dist = (double *)_mm_malloc(sizeof(double) * sz, 32);
@@ -658,7 +679,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 				kseeds[k].x = sigma[k].x*inv[k];
 				kseeds[k].y = sigma[k].y*inv[k];
 			}
-			//__m256d kseedsl_v = _mm256_load_pd(kseedsl);
 		}
 	}
 }
@@ -675,7 +695,7 @@ void SLIC::SaveSuperpixelLabels2PPM(
 	const int                       height)
 {
     FILE* fp;
-    char header[20];
+    //char header[20];
  
     fp = fopen(filename, "wb");
  
@@ -820,7 +840,8 @@ void SLIC::PerformSLICO_ForGivenK(
 	int*						klabels,
 	int&						numlabels,
 	const int&					K,//required number of superpixels
-	const double&				m)//weight given to spatial distance
+	const double&				m,//weight given to spatial distance
+	int                         myrank)
 {
 	vector<labxy> kseeds;
 	kseeds.assign(kseeds.size(), labxy());
@@ -836,7 +857,7 @@ void SLIC::PerformSLICO_ForGivenK(
 	auto startTime = Clock::now();
 	if(1)//LAB
 	{
-		DoRGBtoLABConversion(ubuff, m_labvec);
+		DoRGBtoLABConversion(ubuff, m_labvec, myrank);
 	}
 	else//RGB
 	{
@@ -855,29 +876,32 @@ void SLIC::PerformSLICO_ForGivenK(
 	bool perturbseeds(true);
 	vector<double> edgemag(0);
 	
-	startTime = Clock::now();
-	if(perturbseeds) DetectLabEdges(m_labvec, m_width, m_height, edgemag);
-	GetLABXYSeeds_ForGivenK(kseeds, K, perturbseeds, edgemag);
-	endTime = Clock::now();
-    compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-	cout << compTime.count() << endl;
+	if(myrank == 0)
+	{
+		startTime = Clock::now();
+		if(perturbseeds) DetectLabEdges(m_labvec, m_width, m_height, edgemag);
+		GetLABXYSeeds_ForGivenK(kseeds, K, perturbseeds, edgemag);
+		endTime = Clock::now();
+		compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
+		cout << compTime.count() << endl;
 
-	startTime = Clock::now();
-	int STEP = sqrt(double(sz)/double(K)) + 2.0;//adding a small value in the even the STEP size is too small.
-	PerformSuperpixelSegmentation_VariableSandM(kseeds, klabels,STEP,10);
-	numlabels = kseeds.size();
-	endTime = Clock::now();
-    compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-	cout << compTime.count() << endl;
+		startTime = Clock::now();
+		int STEP = sqrt(double(sz)/double(K)) + 2.0;//adding a small value in the even the STEP size is too small.
+		PerformSuperpixelSegmentation_VariableSandM(kseeds, klabels,STEP,10);
+		numlabels = kseeds.size();
+		endTime = Clock::now();
+		compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
+		cout << compTime.count() << endl;
 
-	startTime = Clock::now();
-	int* nlabels = new int[sz];
-	EnforceLabelConnectivity(klabels, m_width, m_height, nlabels, numlabels, K);
-	endTime = Clock::now();
-    compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-	cout << compTime.count() << endl;
-	{for(int i = 0; i < sz; i++ ) klabels[i] = nlabels[i];}
-	if(nlabels) delete [] nlabels;
+		startTime = Clock::now();
+		int* nlabels = new int[sz];
+		EnforceLabelConnectivity(klabels, m_width, m_height, nlabels, numlabels, K);
+		endTime = Clock::now();
+		compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
+		cout << compTime.count() << endl;
+		{for(int i = 0; i < sz; i++ ) klabels[i] = nlabels[i];}
+		if(nlabels) delete [] nlabels;
+	}
 }
 
 //===========================================================================
@@ -989,12 +1013,31 @@ int CheckLabelswithPPM(char* filename, int* labels, int width, int height)
 	return num;
 }
 
+void SLIC::Build_mpi_type(double l_p[4], double a_p[4], double b_p[4], MPI_Datatype* mpi_lab)
+{
+	int array_of_blocklengths[3]={4, 4, 4};
+	MPI_Datatype array_of_types[3] = {MPI_DOUBLE, MPI_DOUBLE, MPI_DOUBLE};
+	MPI_Aint l_addr, a_addr, b_addr;
+	MPI_Aint array_of_displacements[3] = {0};
+	MPI_Get_address(&l_p, &l_addr);
+	MPI_Get_address(&a_p, &a_addr);
+	MPI_Get_address(&b_p, &b_addr);
+	array_of_displacements[1] = a_addr - l_addr;
+	array_of_displacements[2] = b_addr - l_addr;
+	MPI_Type_create_struct(3, array_of_blocklengths, array_of_displacements, array_of_types, mpi_lab);
+	MPI_Type_commit(mpi_lab);
+}
 //===========================================================================
 ///	The main function
 ///
 //===========================================================================
 int main (int argc, char **argv)
 {
+	int myrank, comm_sz;
+	MPI_Init(NULL, NULL);
+	MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+	MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
+
 	unsigned int* img = NULL;
 	int width(0);
 	int height(0);
@@ -1012,22 +1055,28 @@ int main (int argc, char **argv)
 	m_compactness = 10.0;
     auto startTime = Clock::now();
 	// cout << "start" << endl;
-	slic.PerformSLICO_ForGivenK(img, width, height, labels, numlabels, m_spcount, m_compactness);//for a given number K of superpixels
-    auto endTime = Clock::now();
-    auto compTime = chrono::duration_cast<chrono::microseconds>(endTime - startTime);
-    cout <<  "Computing time=" << compTime.count()/1000 << " ms" << endl;
+	slic.PerformSLICO_ForGivenK(img, width, height, labels, numlabels, m_spcount, m_compactness, myrank);//for a given number K of superpixels
+	if(myrank == 0)
+	{
+		auto endTime = Clock::now();
+		auto compTime = chrono::duration_cast<chrono::microseconds>(endTime - startTime);
+		cout <<  "Computing time=" << compTime.count()/1000 << " ms" << endl;
 
-	int num = CheckLabelswithPPM((char *)"check.ppm", labels, width, height);
-	if (num < 0) {
-		cout <<  "The result for labels is different from output_labels.ppm." << endl;
-	} else {
-		cout <<  "There are " << num << " points' labels are different from original file." << endl;
+		int num = CheckLabelswithPPM((char *)"check.ppm", labels, width, height);
+		if (num < 0) {
+			cout <<  "The result for labels is different from output_labels.ppm." << endl;
+		} else {
+			cout <<  "There are " << num << " points' labels are different from original file." << endl;
+		}
+		
+		slic.SaveSuperpixelLabels2PPM((char *)"output_labels.ppm", labels, width, height);
 	}
-	
-	slic.SaveSuperpixelLabels2PPM((char *)"output_labels.ppm", labels, width, height);
+    
 	if(labels) _mm_free(labels);
 	
 	if(img) delete [] img;
+
+	MPI_Finalize();
 
 	return 0;
 }
