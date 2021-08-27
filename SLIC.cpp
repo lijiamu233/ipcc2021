@@ -478,6 +478,13 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 			}
 			layers.push_back(std::move(cur_layer));
 		}
+		// cout << "========================\n";
+		// for (auto & i : layers) {
+		// 	for (auto &j : i) {
+		// 		cout << j << ' ';
+		// 	}
+		// 	cout << endl;
+		// }
 		
 		for (int layer = 0; layer < layers.size(); ++layer) {
 			#pragma omp parallel for schedule(dynamic, 1)
