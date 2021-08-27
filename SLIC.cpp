@@ -454,6 +454,8 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 
 	while( numitr < NUMITR )
 	{
+		auto startTime = Clock::now();
+
 		//------
 		//cumerr = 0;
 		numitr++;
@@ -501,16 +503,21 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		// 	}
 		// 	cout << endl;
 		// }
-		
+		auto endTime = Clock::now();
+		auto compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
+		cout << "toposort: "<< compTime.count() << endl;
+		startTime = Clock::now();
+		omp_set_nested(true);
+		omp_set_dynamic(true);
 		for (int layer = 0; layer < layers.size(); ++layer) {
-			#pragma omp parallel for schedule(dynamic, 1)
+			#pragma omp parallel for schedule(dynamic, 1) num_threads(4)
 			for (int in = 0; in < layers[layer].size(); ++in) {
 				int n = layers[layer][in];
-				int y1 = max(0,			(int)(kseeds[n].y-offset));
-				int y2 = min(m_height,	(int)(kseeds[n].y+offset));
-				int x1 = max(0,			(int)(kseeds[n].x-offset));
-				int x2 = min(m_width,	(int)(kseeds[n].x+offset));
-
+				int y1 = max(0, (int)(kseeds[n].y-offset));
+				int y2 = min(m_height, (int)(kseeds[n].y+offset));
+				int x1 = max(0,	(int)(kseeds[n].x-offset));
+				int x2 = min(m_width, (int)(kseeds[n].x+offset));
+				#pragma omp parallel for num_threads(16)
 				for( int y = y1; y < y2; y++ )
 				{
 					ptrdiff_t start_offset = (y * m_width + x1) % vec_width == 0 ? 0 : vec_width - (y * m_width + x1) % vec_width;
@@ -626,6 +633,9 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 
 			}
 		}
+		endTime = Clock::now();
+		compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
+		cout << "parallel and simd region: "<< compTime.count() << endl;
 		//-----------------------------------------------------------------
 		// Assign the max color distance for a cluster
 		//-----------------------------------------------------------------
@@ -636,24 +646,54 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		//-----------------------------------------------------------------
 		// Recalculate the centroid and store in the seed values
 		//-----------------------------------------------------------------
+		startTime = Clock::now();
 		sigma.assign(numk, labxy());
 		clustersize.assign(numk, 0);
-		#pragma omp simd
+		struct labxydz {
+			double l, a, b, x, y, dst;
+			int sz;
+		} ;
+		vector<vector<labxydz>> sum_tmp(omp_get_max_threads(), vector<labxydz>(numk));
+		for (int i = 0; i < sum_tmp.size(); ++i) {
+			for (int j = 0; j < sum_tmp[i].size(); ++j) {
+				sum_tmp[i][j].dst = maxlab[j];
+			}
+		}
+		#pragma omp parallel for simd
 		for( int j = 0; j < sz; j++ )
 		{
 			int temp = klabels[j];
-			if(maxlab[temp] < dist[j]) 
-				maxlab[temp] = dist[j];
+			int id = omp_get_thread_num();
+			sum_tmp[id][temp].dst = max(sum_tmp[id][temp].dst, dist[j]);
+			// if(maxlab[temp] < dist[j]) 
+				// maxlab[temp] = dist[j];
+			sum_tmp[id][temp].l += m_labvec[j / vec_width].l[j % vec_width];
+			sum_tmp[id][temp].a += m_labvec[j / vec_width].a[j % vec_width];
+			sum_tmp[id][temp].b += m_labvec[j / vec_width].b[j % vec_width];
+			sum_tmp[id][temp].x += (j%m_width);
+			sum_tmp[id][temp].y += (j/m_width);
+			sum_tmp[id][temp].sz ++;
 			//_ASSERT(klabels[j] >= 0);
-			sigma[temp].l += m_labvec[j / vec_width].l[j % vec_width];
-			sigma[temp].a += m_labvec[j / vec_width].a[j % vec_width];
-			sigma[temp].b += m_labvec[j / vec_width].b[j % vec_width];
-			sigma[temp].x += (j%m_width);
-			sigma[temp].y += (j/m_width);
+			// sigma[temp].l += m_labvec[j / vec_width].l[j % vec_width];
+			// sigma[temp].a += m_labvec[j / vec_width].a[j % vec_width];
+			// sigma[temp].b += m_labvec[j / vec_width].b[j % vec_width];
+			// sigma[temp].x += (j%m_width);
+			// sigma[temp].y += (j/m_width);
 
-			clustersize[temp]++;
+			// clustersize[temp]++;
 		}
-
+		#pragma omp simd
+		for (int i = 0; i < sum_tmp.size(); ++i) {
+			for (int j = 0; j < sum_tmp[i].size(); ++j) {
+				sigma[j].l += sum_tmp[i][j].l;
+				sigma[j].a += sum_tmp[i][j].a;
+				sigma[j].b += sum_tmp[i][j].b;
+				sigma[j].x += sum_tmp[i][j].x;
+				sigma[j].y += sum_tmp[i][j].y;
+				clustersize[j] += sum_tmp[i][j].sz;
+				maxlab[j] = max(sum_tmp[i][j].dst, maxlab[j]);
+			}
+		}
 		{
 			#pragma omp simd
 			for( int k = 0; k < numk; k++ )
@@ -674,6 +714,10 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 				kseeds[k].x = sigma[k].x*inv[k];
 				kseeds[k].y = sigma[k].y*inv[k];
 			}
+			//__m256d kseedsl_v = _mm256_load_pd(kseedsl);
+			endTime = Clock::now();
+			compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
+			cout << "sigma and new seed: "<< compTime.count() << endl;
 		}
 	}
 }
@@ -867,10 +911,9 @@ void SLIC::PerformSLICO_ForGivenK(
 	//--------------------------------------------------
 	auto endTime = Clock::now();
     auto compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-	cout << compTime.count() << endl;
+	cout << "Color conversion: " << compTime.count() << endl;
 	bool perturbseeds(true);
 	vector<double> edgemag(0);
-	
 	if(myrank == 0)
 	{
 		startTime = Clock::now();
@@ -878,7 +921,7 @@ void SLIC::PerformSLICO_ForGivenK(
 		GetLABXYSeeds_ForGivenK(kseeds, K, perturbseeds, edgemag);
 		endTime = Clock::now();
 		compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-		cout << compTime.count() << endl;
+		cout << "DetectLabEdges GetLABXYSeeds_ForGivenK: " << compTime.count() << endl;
 
 		startTime = Clock::now();
 		int STEP = sqrt(double(sz)/double(K)) + 2.0;//adding a small value in the even the STEP size is too small.
@@ -886,14 +929,14 @@ void SLIC::PerformSLICO_ForGivenK(
 		numlabels = kseeds.size();
 		endTime = Clock::now();
 		compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-		cout << compTime.count() << endl;
+		cout << "PerformSuperpixelSegmentation_VariableSandM: "<< compTime.count() << endl;
 
 		startTime = Clock::now();
 		int* nlabels = new int[sz];
 		EnforceLabelConnectivity(klabels, m_width, m_height, nlabels, numlabels, K);
 		endTime = Clock::now();
 		compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-		cout << compTime.count() << endl;
+		cout << "EnforceLabelConnectivity: " << compTime.count() << endl;
 		{for(int i = 0; i < sz; i++ ) klabels[i] = nlabels[i];}
 		if(nlabels) delete [] nlabels;
 	}
