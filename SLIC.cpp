@@ -443,127 +443,171 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		numitr++;
 		//------
 		memset(&distvec[0], 0x7f, sizeof(double) * sz);
-		// distvec.assign(sz, DBL_MAX);
-		for( int n = 0; n < numk; n++ )
-		{
-			int y1 = max(0,			(int)(kseeds[n].y-offset));
-			int y2 = min(m_height,	(int)(kseeds[n].y+offset));
-			int x1 = max(0,			(int)(kseeds[n].x-offset));
-			int x2 = min(m_width,	(int)(kseeds[n].x+offset));
-
-			for( int y = y1; y < y2; y++ )
-			{
-				ptrdiff_t start_offset = (y * m_width + x1) % vec_width == 0 ? 0 : vec_width - (y * m_width + x1) % vec_width;
-				ptrdiff_t end_offset = (y * m_width + x2) % vec_width;
-				for (int x = x1; x < start_offset + x1; ++x) {
-					int i = y*m_width + x;
-					double l = m_labvec[i / vec_width].l[i % vec_width];
-					double a = m_labvec[i / vec_width].a[i % vec_width];
-					double b = m_labvec[i / vec_width].b[i % vec_width];
-					double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
-									(a - kseeds[n].a)*(a - kseeds[n].a) +
-									(b - kseeds[n].b)*(b - kseeds[n].b);
-					double xy = (x - kseeds[n].x)*(x - kseeds[n].x) +
-									(y - kseeds[n].y)*(y - kseeds[n].y);							
-					//------------------------------------------------------------------------
-					double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
-					//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
-					//------------------------------------------------------------------------
-					dist[i] = lab;
-					if( distv < distvec[i] )
-					{
-						distvec[i] = distv;
-						klabels[i]  = n;
-					}
-				}
-				__m256d vseedsl, vseedsa, vseedsb, vseedsx, vseedsy, vmaxlab;
-				vseedsl = _mm256_set1_pd(kseeds[n].l);
-				vseedsa = _mm256_set1_pd(kseeds[n].a);
-				vseedsb = _mm256_set1_pd(kseeds[n].b);
-				vseedsx = _mm256_set1_pd(kseeds[n].x);
-				vseedsy = _mm256_set1_pd(kseeds[n].y);
-				vmaxlab = _mm256_set1_pd(maxlab[n]);
-				__m256d vy = _mm256_set1_pd(double(y));
-				// #pragma omp parallel for
-				for(int x = x1 + start_offset; x < x2 - end_offset; x += vec_width )
-				{
-					for (int t = 0; t < vec_width; t += avx_width) {
-						// int t = 0;
-						int i = y*m_width + x + t;
-						__m256d vl, va, vb, vx;
-						__m256d vlab, vxy, vdistv;
-						vl = _mm256_load_pd(&m_labvec[i / vec_width].l[t]);
-						// double l = m_labvec[i / vec_width].l[i % vec_width];
-						va = _mm256_load_pd(&m_labvec[i / vec_width].a[t]);
-						// double a = m_labvec[i / vec_width].a[i % vec_width];
-						vb = _mm256_load_pd(&m_labvec[i / vec_width].b[t]);
-						// double b = m_labvec[i / vec_width].b[i % vec_width];
-						vlab = _mm256_fmadd_pd(
-							_mm256_sub_pd(vb, vseedsb), 
-							_mm256_sub_pd(vb, vseedsb),
-							_mm256_fmadd_pd(
-								_mm256_sub_pd(va, vseedsa), 
-								_mm256_sub_pd(va, vseedsa), 
-								_mm256_mul_pd(
-									_mm256_sub_pd(vl, vseedsl), 
-									_mm256_sub_pd(vl, vseedsl)
-						)));
-						vx = _mm256_set_pd(double(x + t + 3), double(x + t + 2), double(x + t + 1), double(x + t));
-
-						// double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
-										// (a - kseeds[n].a)*(a - kseeds[n].a) +
-										// (b - kseeds[n].b)*(b - kseeds[n].b);
-						vxy = _mm256_fmadd_pd(
-							_mm256_sub_pd(vx, vseedsx),
-							_mm256_sub_pd(vx, vseedsx),
-							_mm256_mul_pd(
-								_mm256_sub_pd(vy, vseedsy),
-								_mm256_sub_pd(vy, vseedsy)
-						));
-						// double xy = (x - kseeds[n].x)*(x - kseeds[n].x) +
-										// (y - kseeds[n].y)*(y - kseeds[n].y);	
-						_mm256_stream_pd(&dist[i], vlab);						
-						//------------------------------------------------------------------------
-						vdistv = _mm256_fmadd_pd(
-							vxy,
-							vinvxywt,
-							_mm256_div_pd(vlab, vmaxlab)
-						);
-						// double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
-						//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
-						//------------------------------------------------------------------------
-						// dist[i].lab = lab;
-						__m256d mask = _mm256_cmp_pd(vdistv, _mm256_load_pd(distvec + i), _CMP_NGE_UQ);
-						int imask = _mm256_movemask_pd(mask);
-						_mm_maskstore_epi32(klabels + i, _mm_load_si128((__m128i *)(void*)(lookuptable + imask)), _mm_set1_epi32(n));
-						_mm256_maskstore_pd(distvec + i, (__m256i)_mm256_castpd_ps(mask), vdistv);
-					}
-				}
-
-				for (int x = x2 - end_offset; x < x2; ++x) {
-					int i = y*m_width + x;
-					//_ASSERT( y < m_height && x < m_width && y >= 0 && x >= 0 );
-					double l = m_labvec[i / vec_width].l[i % vec_width];
-					double a = m_labvec[i / vec_width].a[i % vec_width];
-					double b = m_labvec[i / vec_width].b[i % vec_width];
-					double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
-									(a - kseeds[n].a)*(a - kseeds[n].a) +
-									(b - kseeds[n].b)*(b - kseeds[n].b);
-					double xy = (x - kseeds[n].x)*(x - kseeds[n].x) +
-									(y - kseeds[n].y)*(y - kseeds[n].y);							
-					//------------------------------------------------------------------------
-					double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
-					//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
-					//------------------------------------------------------------------------
-					dist[i] = lab;
-					if( distv < distvec[i] )
-					{
-						distvec[i] = distv;
-						klabels[i]  = n;
-					}
+		vector<vector<int>> graph(numk);
+		vector<int> in_degree(numk, 0);
+		vector<vector<int>> layers;
+		for (int i = 0; i < numk; ++i) {
+			int y1 = max(0,			(int)(kseeds[i].y-offset));
+			int y2 = min(m_height,	(int)(kseeds[i].y+offset));
+			int x1 = max(0,			(int)(kseeds[i].x-offset));
+			int x2 = min(m_width,	(int)(kseeds[i].x+offset));
+			for (int j = i + 1; j < numk; ++j) {
+				if (
+					y1 <= kseeds[j].y && kseeds[j].y < y2 &&
+					x1 <= kseeds[j].x && kseeds[j].x < x2
+				) {
+					graph[i].push_back(j);
+					in_degree[j]++;
 				}
 			}
-			
+		}
+		vector<char> vis(numk, 0);
+		for (int ncnt = 0; ncnt < numk; ) {
+			vector<int> cur_layer;
+			for (int i = 0; i < numk; ++i) {
+				if (!vis[i] && in_degree[i] == 0) {
+					cur_layer.push_back(i);
+					vis[i] = 1;
+					ncnt++;
+				}
+			}
+			for (int i = 0; i < cur_layer.size(); ++i) {
+				for (int j = 0; j < graph[cur_layer[i]].size(); ++j) {
+					in_degree[graph[cur_layer[i]][j]]--;
+				}
+			}
+			layers.push_back(std::move(cur_layer));
+		}
+		// for (auto &j : layers) {
+		// 	for (auto &i : j) {
+		// 		cout << i << ' ';
+		// 	}
+		// 	cout << endl;
+		// }
+		
+		for (int layer = 0; layer < layers.size(); ++layer) {
+			#pragma omp parallel for schedule(dynamic, 1)
+			for (int in = 0; in < layers[layer].size(); ++in) {
+				int n = layers[layer][in];
+				int y1 = max(0,			(int)(kseeds[n].y-offset));
+				int y2 = min(m_height,	(int)(kseeds[n].y+offset));
+				int x1 = max(0,			(int)(kseeds[n].x-offset));
+				int x2 = min(m_width,	(int)(kseeds[n].x+offset));
+
+				for( int y = y1; y < y2; y++ )
+				{
+					ptrdiff_t start_offset = (y * m_width + x1) % vec_width == 0 ? 0 : vec_width - (y * m_width + x1) % vec_width;
+					ptrdiff_t end_offset = (y * m_width + x2) % vec_width;
+					for (int x = x1; x < start_offset + x1; ++x) {
+						int i = y*m_width + x;
+						double l = m_labvec[i / vec_width].l[i % vec_width];
+						double a = m_labvec[i / vec_width].a[i % vec_width];
+						double b = m_labvec[i / vec_width].b[i % vec_width];
+						double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
+										(a - kseeds[n].a)*(a - kseeds[n].a) +
+										(b - kseeds[n].b)*(b - kseeds[n].b);
+						double xy = (x - kseeds[n].x)*(x - kseeds[n].x) +
+										(y - kseeds[n].y)*(y - kseeds[n].y);							
+						//------------------------------------------------------------------------
+						double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
+						//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
+						//------------------------------------------------------------------------
+						dist[i] = lab;
+						if( distv < distvec[i] )
+						{
+							distvec[i] = distv;
+							klabels[i]  = n;
+						}
+					}
+					__m256d vseedsl, vseedsa, vseedsb, vseedsx, vseedsy, vmaxlab;
+					vseedsl = _mm256_set1_pd(kseeds[n].l);
+					vseedsa = _mm256_set1_pd(kseeds[n].a);
+					vseedsb = _mm256_set1_pd(kseeds[n].b);
+					vseedsx = _mm256_set1_pd(kseeds[n].x);
+					vseedsy = _mm256_set1_pd(kseeds[n].y);
+					vmaxlab = _mm256_set1_pd(maxlab[n]);
+					__m256d vy = _mm256_set1_pd(double(y));
+					// #pragma omp parallel for
+					for(int x = x1 + start_offset; x < x2 - end_offset; x += vec_width )
+					{
+						for (int t = 0; t < vec_width; t += avx_width) {
+							// int t = 0;
+							int i = y*m_width + x + t;
+							__m256d vl, va, vb, vx;
+							__m256d vlab, vxy, vdistv;
+							vl = _mm256_load_pd(&m_labvec[i / vec_width].l[t]);
+							// double l = m_labvec[i / vec_width].l[i % vec_width];
+							va = _mm256_load_pd(&m_labvec[i / vec_width].a[t]);
+							// double a = m_labvec[i / vec_width].a[i % vec_width];
+							vb = _mm256_load_pd(&m_labvec[i / vec_width].b[t]);
+							// double b = m_labvec[i / vec_width].b[i % vec_width];
+							vlab = _mm256_fmadd_pd(
+								_mm256_sub_pd(vb, vseedsb), 
+								_mm256_sub_pd(vb, vseedsb),
+								_mm256_fmadd_pd(
+									_mm256_sub_pd(va, vseedsa), 
+									_mm256_sub_pd(va, vseedsa), 
+									_mm256_mul_pd(
+										_mm256_sub_pd(vl, vseedsl), 
+										_mm256_sub_pd(vl, vseedsl)
+							)));
+							vx = _mm256_set_pd(double(x + t + 3), double(x + t + 2), double(x + t + 1), double(x + t));
+
+							// double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
+											// (a - kseeds[n].a)*(a - kseeds[n].a) +
+											// (b - kseeds[n].b)*(b - kseeds[n].b);
+							vxy = _mm256_fmadd_pd(
+								_mm256_sub_pd(vx, vseedsx),
+								_mm256_sub_pd(vx, vseedsx),
+								_mm256_mul_pd(
+									_mm256_sub_pd(vy, vseedsy),
+									_mm256_sub_pd(vy, vseedsy)
+							));
+							// double xy = (x - kseeds[n].x)*(x - kseeds[n].x) +
+											// (y - kseeds[n].y)*(y - kseeds[n].y);	
+							_mm256_stream_pd(&dist[i], vlab);						
+							//------------------------------------------------------------------------
+							vdistv = _mm256_fmadd_pd(
+								vxy,
+								vinvxywt,
+								_mm256_div_pd(vlab, vmaxlab)
+							);
+							// double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
+							//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
+							//------------------------------------------------------------------------
+							// dist[i].lab = lab;
+							__m256d mask = _mm256_cmp_pd(vdistv, _mm256_load_pd(distvec + i), _CMP_NGE_UQ);
+							int imask = _mm256_movemask_pd(mask);
+							_mm_maskstore_epi32(klabels + i, _mm_load_si128((__m128i *)(void*)(lookuptable + imask)), _mm_set1_epi32(n));
+							_mm256_maskstore_pd(distvec + i, (__m256i)_mm256_castpd_ps(mask), vdistv);
+						}
+					}
+
+					for (int x = x2 - end_offset; x < x2; ++x) {
+						int i = y*m_width + x;
+						//_ASSERT( y < m_height && x < m_width && y >= 0 && x >= 0 );
+						double l = m_labvec[i / vec_width].l[i % vec_width];
+						double a = m_labvec[i / vec_width].a[i % vec_width];
+						double b = m_labvec[i / vec_width].b[i % vec_width];
+						double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
+										(a - kseeds[n].a)*(a - kseeds[n].a) +
+										(b - kseeds[n].b)*(b - kseeds[n].b);
+						double xy = (x - kseeds[n].x)*(x - kseeds[n].x) +
+										(y - kseeds[n].y)*(y - kseeds[n].y);							
+						//------------------------------------------------------------------------
+						double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
+						//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
+						//------------------------------------------------------------------------
+						dist[i] = lab;
+						if( distv < distvec[i] )
+						{
+							distvec[i] = distv;
+							klabels[i]  = n;
+						}
+					}
+				}
+
+			}
 		}
 		//-----------------------------------------------------------------
 		// Assign the max color distance for a cluster
