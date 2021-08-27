@@ -191,7 +191,7 @@ void SLIC::DoRGBtoLABConversion(
 	double Yr = 1.0;		//reference white
 	double Zr = 1.088754;	//reference white
 
-	int local_start, local_end, loop_nums = 0;
+	int local_start, local_end;
 	if(myrank == 0)
 	{
 		local_start = 0;
@@ -199,13 +199,12 @@ void SLIC::DoRGBtoLABConversion(
 	}
 	else
 	{
-		local_start = sz/2+1;
+		local_start = sz/2;
 		local_end = sz;
 	}
 	#pragma omp parallel for
 	for( int j = local_start; j < local_end; j += vec_width)
 	{
-		++loop_nums;
 		#pragma omp simd
 		for (int i = 0; i < vec_width; i ++) {
 			int sR = (ubuff[j + i] >> 16) & 0xFF;
@@ -249,17 +248,13 @@ void SLIC::DoRGBtoLABConversion(
 		}
 	}
 
-	MPI_Datatype mpi_lab;
-	vec_lab m_lab;
-	Build_mpi_type(m_lab.l, m_lab.a, m_lab.b, &mpi_lab);
-
 	if(myrank == 0)
 	{
-		MPI_Recv(labvec + local_end / vec_width + 1, (sz - local_end) / vec_width +1 , mpi_lab, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		MPI_Recv(&(labvec[0].l[0]) + 3 * sz / 2, 3 * sz / 2, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 	}
 	else
 	{
-		MPI_Send(labvec + local_start / vec_width, loop_nums, mpi_lab, 0, 0, MPI_COMM_WORLD);
+		MPI_Send(&(labvec[0].l[0]) + 3 * sz / 2, 3 * sz / 2, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
 	}
 }
 
