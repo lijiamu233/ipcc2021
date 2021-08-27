@@ -491,16 +491,17 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		auto compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
 		cout << "toposort: "<< compTime.count() << endl;
 		startTime = Clock::now();
-
+		omp_set_nested(true);
+		omp_set_dynamic(true);
 		for (int layer = 0; layer < layers.size(); ++layer) {
-			#pragma omp parallel for schedule(dynamic, 1) num_threads(5)
+			#pragma omp parallel for schedule(dynamic, 1) num_threads(4)
 			for (int in = 0; in < layers[layer].size(); ++in) {
 				int n = layers[layer][in];
 				int y1 = max(0, (int)(kseeds[n].y-offset));
 				int y2 = min(m_height, (int)(kseeds[n].y+offset));
 				int x1 = max(0,	(int)(kseeds[n].x-offset));
 				int x2 = min(m_width, (int)(kseeds[n].x+offset));
-				#pragma omp parallel for num_threads(8)
+				#pragma omp parallel for num_threads(16)
 				for( int y = y1; y < y2; y++ )
 				{
 					ptrdiff_t start_offset = (y * m_width + x1) % vec_width == 0 ? 0 : vec_width - (y * m_width + x1) % vec_width;
