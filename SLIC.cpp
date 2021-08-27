@@ -447,10 +447,10 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		vector<int> in_degree(numk, 0);
 		vector<vector<int>> layers;
 		for (int i = 0; i < numk; ++i) {
-			int y1 = max(0,			(int)(kseeds[i].y-offset));
-			int y2 = min(m_height,	(int)(kseeds[i].y+offset));
-			int x1 = max(0,			(int)(kseeds[i].x-offset));
-			int x2 = min(m_width,	(int)(kseeds[i].x+offset));
+			int y1 = max(0,			(int)(kseeds[i].y- 2 * offset));
+			int y2 = min(m_height,	(int)(kseeds[i].y+ 2 * offset));
+			int x1 = max(0,			(int)(kseeds[i].x- 2 * offset));
+			int x2 = min(m_width,	(int)(kseeds[i].x+ 2 * offset));
 			for (int j = i + 1; j < numk; ++j) {
 				if (
 					y1 <= kseeds[j].y && kseeds[j].y < y2 &&
@@ -478,12 +478,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 			}
 			layers.push_back(std::move(cur_layer));
 		}
-		// for (auto &j : layers) {
-		// 	for (auto &i : j) {
-		// 		cout << i << ' ';
-		// 	}
-		// 	cout << endl;
-		// }
 		
 		for (int layer = 0; layer < layers.size(); ++layer) {
 			#pragma omp parallel for schedule(dynamic, 1)
