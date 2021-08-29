@@ -398,7 +398,7 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 	*/
 	vector<int> clustersize(numk, 0);
 	vector<double> inv(numk, 0);//to store 1/clustersize[k] values
-	vector<dist_t> dist(sz);
+	vector<double> dist(sz);
 	vector<double> distvec(sz);
 	vector<double> maxlab(numk, double(100));
 	// vector<double> maxlab(numk, 10*10);//THIS IS THE VARIABLE VALUE OF M, just start with 10
@@ -413,40 +413,85 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		//------
 		memset(&distvec[0], 0x7f, sizeof(double) * sz);
 		// distvec.assign(sz, DBL_MAX);
-		for( int n = 0; n < numk; n++ )
+		vector<vector<int>> graph(numk);
+		vector<int> in_degree(numk, 0);
+		vector<vector<int>> layers;
+		for (int i = 0; i < numk; ++i)
 		{
-			int y1 = max(0,			(int)(kseeds[n].y-offset));
-			int y2 = min(m_height,	(int)(kseeds[n].y+offset));
-			int x1 = max(0,			(int)(kseeds[n].x-offset));
-			int x2 = min(m_width,	(int)(kseeds[n].x+offset));
-			#pragma omp parallel for collapse(2)
-			for( int y = y1; y < y2; y++ )
+			int y1 = max(0, (int)(kseeds[i].y - 2 * offset));
+			int y2 = min(m_height, (int)(kseeds[i].y + 2 * offset));
+			int x1 = max(0, (int)(kseeds[i].x - 2 * offset));
+			int x2 = min(m_width, (int)(kseeds[i].x + 2 * offset));
+			for (int j = i + 1; j < numk; ++j)
 			{
-				for( int x = x1; x < x2; x++ )
+				if (
+						y1 <= kseeds[j].y && kseeds[j].y < y2 &&
+						x1 <= kseeds[j].x && kseeds[j].x < x2)
 				{
-					int i = y*m_width + x;
-					//_ASSERT( y < m_height && x < m_width && y >= 0 && x >= 0 );
-
-					double l = m_labvec[i].l;
-					double a = m_labvec[i].a;
-					double b = m_labvec[i].b;
-					double lab = (l - kseeds[n].l)*(l - kseeds[n].l) +
-									(a - kseeds[n].a)*(a - kseeds[n].a) +
-									(b - kseeds[n].b)*(b - kseeds[n].b);
-					double xy = (x - kseeds[n].x)*(x - kseeds[n].x) +
-									(y - kseeds[n].y)*(y - kseeds[n].y);							
-					//------------------------------------------------------------------------
-					double distv = lab/maxlab[n] + xy*invxywt;//only varying m, prettier superpixels
-					//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
-					//------------------------------------------------------------------------
-					dist[i].lab = lab;
-					dist[i].xy = xy;
-					if( distv < distvec[i] )
+					graph[i].push_back(j);
+					in_degree[j]++;
+				}
+			}
+		}
+		vector<char> vis(numk, 0);
+		for (int ncnt = 0; ncnt < numk;)
+		{
+			vector<int> cur_layer;
+			for (int i = 0; i < numk; ++i)
+			{
+				if (!vis[i] && in_degree[i] == 0)
+				{
+					cur_layer.push_back(i);
+					vis[i] = 1;
+					ncnt++;
+				}
+			}
+			for (int i = 0; i < cur_layer.size(); ++i)
+			{
+				for (int j = 0; j < graph[cur_layer[i]].size(); ++j)
+				{
+					in_degree[graph[cur_layer[i]][j]]--;
+				}
+			}
+			layers.push_back(std::move(cur_layer));
+		}
+		omp_set_nested(true);
+		omp_set_dynamic(true);
+		for (int layer = 0; layer < layers.size(); ++layer) {
+			#pragma omp parallel for schedule(dynamic, 1) num_threads(4)
+			for (int in = 0; in < layers[layer].size(); ++in) {
+				int n = layers[layer][in];
+				int y1 = max(0, (int)(kseeds[n].y-offset));
+				int y2 = min(m_height, (int)(kseeds[n].y+offset));
+				int x1 = max(0,	(int)(kseeds[n].x-offset));
+				int x2 = min(m_width, (int)(kseeds[n].x+offset));
+				#pragma omp parallel for simd collapse(2) num_threads(16)
+				for (int y = y1; y < y2; y++)
+				{
+					for (int x = x1; x < x2; x++)
 					{
-						distvec[i] = distv;
-						klabels[i]  = n;
-					}
+						int i = y * m_width + x;
+						//_ASSERT( y < m_height && x < m_width && y >= 0 && x >= 0 );
 
+						double l = m_labvec[i].l;
+						double a = m_labvec[i].a;
+						double b = m_labvec[i].b;
+						double lab = (l - kseeds[n].l) * (l - kseeds[n].l) +
+												 (a - kseeds[n].a) * (a - kseeds[n].a) +
+												 (b - kseeds[n].b) * (b - kseeds[n].b);
+						double xy = (x - kseeds[n].x) * (x - kseeds[n].x) +
+												(y - kseeds[n].y) * (y - kseeds[n].y);
+						//------------------------------------------------------------------------
+						double distv = lab / maxlab[n] + xy * invxywt; //only varying m, prettier superpixels
+						//double dist = distlab[i]/maxlab[n] + distxy[i]/maxxy[n];//varying both m and S
+						//------------------------------------------------------------------------
+						dist[i] = lab;
+						if (distv < distvec[i])
+						{
+							distvec[i] = distv;
+							klabels[i] = n;
+						}
+					}
 				}
 			}
 		}
@@ -457,31 +502,53 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		{
 			maxlab.assign(numk, 1.0);
 		}
-		{
-			//#pragma omp parallel for schedule(dynamic, 1)
-			for( int i = 0; i < sz; i++ )
-			{
-				int temp = klabels[i];
-				if(maxlab[temp] < dist[i].lab) maxlab[temp] = dist[i].lab;
-			}
-		}
-		//-----------------------------------------------------------------
-		// Recalculate the centroid and store in the seed values
-		//-----------------------------------------------------------------
-		sigma.assign(numk, labxy());
 		clustersize.assign(numk, 0);
-		#pragma omp simd
+		sigma.assign(numk, labxy());
+		struct labxydz
+		{
+			double l, a, b, x, y, dst;
+			int sz;
+		};
+		vector<vector<labxydz>> sum_tmp(omp_get_max_threads(), vector<labxydz>(numk));
+		for (int i = 0; i < sum_tmp.size(); ++i) {
+				for (int j = 0; j < sum_tmp[i].size(); ++j) {
+						sum_tmp[i][j].dst = maxlab[j];
+				}
+		}
+		#pragma omp parallel for simd
 		for( int j = 0; j < sz; j++ )
 		{
-			int temp = klabels[j];
-			//_ASSERT(klabels[j] >= 0);
-			sigma[temp].l += m_labvec[j].l;
-			sigma[temp].a += m_labvec[j].a;
-			sigma[temp].b += m_labvec[j].b;
-			sigma[temp].x += (j%m_width);
-			sigma[temp].y += (j/m_width);
+				int temp = klabels[j];
+				int id = omp_get_thread_num();
+				sum_tmp[id][temp].dst = max(sum_tmp[id][temp].dst, dist[j]);
+				// if(maxlab[temp] < dist[j])
+				// maxlab[temp] = dist[j];
+				sum_tmp[id][temp].l += m_labvec[j].l;
+				sum_tmp[id][temp].a += m_labvec[j].a;
+				sum_tmp[id][temp].b += m_labvec[j].b;
+				sum_tmp[id][temp].x += (j%m_width);
+				sum_tmp[id][temp].y += (j/m_width);
+				sum_tmp[id][temp].sz ++;
+				//_ASSERT(klabels[j] >= 0);
+				// sigma[temp].l += m_labvec[j / vec_width].l[j % vec_width];
+				// sigma[temp].a += m_labvec[j / vec_width].a[j % vec_width];
+				// sigma[temp].b += m_labvec[j / vec_width].b[j % vec_width];
+				// sigma[temp].x += (j%m_width);
+				// sigma[temp].y += (j/m_width);
 
-			clustersize[temp]++;
+				// clustersize[temp]++;
+		}
+#pragma omp simd
+		for (int i = 0; i < sum_tmp.size(); ++i) {
+				for (int j = 0; j < sum_tmp[i].size(); ++j) {
+						sigma[j].l += sum_tmp[i][j].l;
+						sigma[j].a += sum_tmp[i][j].a;
+						sigma[j].b += sum_tmp[i][j].b;
+						sigma[j].x += sum_tmp[i][j].x;
+						sigma[j].y += sum_tmp[i][j].y;
+						clustersize[j] += sum_tmp[i][j].sz;
+						maxlab[j] = max(sum_tmp[i][j].dst, maxlab[j]);
+				}
 		}
 
 		{
