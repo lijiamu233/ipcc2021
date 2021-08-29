@@ -32,6 +32,8 @@
 #include <omp.h>
 #include <immintrin.h>
 #include <mpi.h>
+#include <thread>
+#include "MPMCQueue.h"
 
 using namespace std;
 
@@ -699,6 +701,7 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 			for( int k = 0; k < numk; k++ )
 		{
 			//_ASSERT(clustersize[k] > 0);
+			//cout<<"clustersize["<<k<<"] = "<<clustersize[k]<<endl;
 			if( clustersize[k] <= 0 ) clustersize[k] = 1;
 			inv[k] = 1.0/double(clustersize[k]);//computing inverse now to multiply, than divide later
 		}}
@@ -787,6 +790,7 @@ void SLIC::EnforceLabelConnectivity(
 
 	const int sz = width*height;
 	const int SUPSZ = sz/K;
+	const int thread_nums = 1;
 	//nlabels.resize(sz, -1);
 	for( int i = 0; i < sz; i++ ) nlabels[i] = -1;
 	int label(0);
@@ -821,39 +825,109 @@ void SLIC::EnforceLabelConnectivity(
 				}}
 
 				int count(1);
-				for( int c = 0; c < count; c++ )
+				rigtorp::MPMCQueue<pair<int,int>> Q(sz);
+				thread threads[thread_nums];
+				Q.push({k,j});
+				for(int t = 0;t < thread_nums; t++)
 				{
-					for( int n = 0; n < 4; n++ )
-					{
-						int x = xvec[c] + dx4[n];
-						int y = yvec[c] + dy4[n];
-
-						if( (x >= 0 && x < width) && (y >= 0 && y < height) )
+					threads[t] = thread([&] {
+						
+						pair<int,int> v;
+						while(Q.try_pop(v))
 						{
-							int nindex = y*width + x;
-
-							if( 0 > nlabels[nindex] && labels[oindex] == labels[nindex] )
+							//Q.pop(v);
+							if(v.first+v.second*width != oindex && 0 > nlabels[v.first+v.second*width]) continue;
+							pair<int, int> nextv;
+							for( int n = 0; n < 4; n++ )
 							{
-								xvec[count] = x;
-								yvec[count] = y;
-								nlabels[nindex] = label;
-								count++;
+								nextv.first = v.first + dx4[n];
+								nextv.second = v.second + dy4[n];
+								if( (nextv.first >= 0 && nextv.first < width) && (nextv.second >= 0 && nextv.second < height) )
+								{
+									int nindex = nextv.second*width + nextv.first;
+
+									if( 0 > nlabels[nindex] && labels[oindex] == labels[nindex] )
+									{
+										nlabels[nindex] = label;
+										Q.push(nextv);
+										count++;
+									}
+								}
+
 							}
 						}
-
-					}
+					});
 				}
+				for(int t = 0; t < thread_nums; t++) threads[t].join();
+				
+				// for( int c = 0; c < count; c++ )
+				// {
+				// 	for( int n = 0; n < 4; n++ )
+				// 	{
+				// 		int x = xvec[c] + dx4[n];
+				// 		int y = yvec[c] + dy4[n];
+
+				// 		if( (x >= 0 && x < width) && (y >= 0 && y < height) )
+				// 		{
+				// 			int nindex = y*width + x;
+
+				// 			if( 0 > nlabels[nindex] && labels[oindex] == labels[nindex] )
+				// 			{
+				// 				xvec[count] = x;
+				// 				yvec[count] = y;
+				// 				nlabels[nindex] = label;
+				// 				count++;
+				// 			}
+				// 		}
+
+				// 	}
+				// }
 				//-------------------------------------------------------
 				// If segment size is less then a limit, assign an
 				// adjacent label found before, and decrement label count.
 				//-------------------------------------------------------
+				//cout<<"count: "<<count<<endl;
 				if(count <= SUPSZ >> 2)
 				{
-					for( int c = 0; c < count; c++ )
+					// for( int c = 0; c < count; c++ )
+					// {
+					// 	int ind = yvec[c]*width+xvec[c];
+					// 	nlabels[ind] = adjlabel;
+					// }
+					rigtorp::MPMCQueue<pair<int,int>> QQ(sz);
+					thread threads2[thread_nums];
+					QQ.push({k,j});
+					nlabels[oindex] = adjlabel;
+					for(int t = 0;t < thread_nums; t++)
 					{
-						int ind = yvec[c]*width+xvec[c];
-						nlabels[ind] = adjlabel;
+						threads2[t] = thread([&] {
+							pair<int,int> v;
+							while(QQ.try_pop(v))
+							{
+								//QQ.pop(v);
+								//if(v.first+v.second*width != oindex && 0 > nlabels[v.first+v.second*width]) continue;
+								//cout<<v.first<<' '<<v.second<<endl;
+								pair<int, int> nextv;
+								for( int n = 0; n < 4; n++ )
+								{
+									nextv.first = v.first + dx4[n];
+									nextv.second = v.second + dy4[n];
+									if( (nextv.first >= 0 && nextv.first < width) && (nextv.second >= 0 && nextv.second < height) )
+									{
+										int nindex = nextv.second*width + nextv.first;
+
+										if(label == nlabels[nindex] && labels[oindex] == labels[nindex] )
+										{
+											nlabels[nindex] = adjlabel;
+											QQ.push(nextv);
+										}
+									}
+
+								}
+							}
+						});
 					}
+					for(int t = 0; t < thread_nums; t++) threads2[t].join();
 					label--;
 				}
 				label++;
