@@ -438,7 +438,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 
 	while( numitr < NUMITR )
 	{
-		auto startTime = Clock::now();
 
 		//------
 		//cumerr = 0;
@@ -487,10 +486,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		// 	}
 		// 	cout << endl;
 		// }
-		auto endTime = Clock::now();
-		auto compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-		cout << "toposort: "<< compTime.count() << endl;
-		startTime = Clock::now();
 		omp_set_nested(true);
 		omp_set_dynamic(true);
 		for (int layer = 0; layer < layers.size(); ++layer) {
@@ -617,9 +612,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 
 			}
 		}
-		endTime = Clock::now();
-		compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-		cout << "parallel and simd region: "<< compTime.count() << endl;
 		//-----------------------------------------------------------------
 		// Assign the max color distance for a cluster
 		//-----------------------------------------------------------------
@@ -630,7 +622,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 		//-----------------------------------------------------------------
 		// Recalculate the centroid and store in the seed values
 		//-----------------------------------------------------------------
-		startTime = Clock::now();
 		sigma.assign(numk, labxy());
 		clustersize.assign(numk, 0);
 		struct labxydz {
@@ -699,9 +690,6 @@ void SLIC::PerformSuperpixelSegmentation_VariableSandM(
 				kseeds[k].y = sigma[k].y*inv[k];
 			}
 			//__m256d kseedsl_v = _mm256_load_pd(kseedsl);
-			endTime = Clock::now();
-			compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-			cout << "sigma and new seed: "<< compTime.count() << endl;
 		}
 	}
 }
@@ -876,7 +864,6 @@ void SLIC::PerformSLICO_ForGivenK(
 	//if(0 == klabels) klabels = new int[sz];
 	for( int s = 0; s < sz; s++ ) klabels[s] = -1;
 	//--------------------------------------------------
-	auto startTime = Clock::now();
 	if(1)//LAB
 	{
 		DoRGBtoLABConversion(ubuff, m_labvec);
@@ -892,33 +879,18 @@ void SLIC::PerformSLICO_ForGivenK(
 		// }
 	}
 	//--------------------------------------------------
-	auto endTime = Clock::now();
-    auto compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-	cout << "Color conversion: " << compTime.count() << endl;
 	bool perturbseeds(true);
 	vector<double> edgemag(0);
 	
-	startTime = Clock::now();
 	if(perturbseeds) DetectLabEdges(m_labvec, m_width, m_height, edgemag);
 	GetLABXYSeeds_ForGivenK(kseeds, K, perturbseeds, edgemag);
-	endTime = Clock::now();
-    compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-	cout << "DetectLabEdges GetLABXYSeeds_ForGivenK: " << compTime.count() << endl;
 
-	startTime = Clock::now();
 	int STEP = sqrt(double(sz)/double(K)) + 2.0;//adding a small value in the even the STEP size is too small.
 	PerformSuperpixelSegmentation_VariableSandM(kseeds, klabels,STEP,10);
 	numlabels = kseeds.size();
-	endTime = Clock::now();
-    compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-	cout << "PerformSuperpixelSegmentation_VariableSandM: "<< compTime.count() << endl;
 
-	startTime = Clock::now();
 	int* nlabels = new int[sz];
 	EnforceLabelConnectivity(klabels, m_width, m_height, nlabels, numlabels, K);
-	endTime = Clock::now();
-    compTime = chrono::duration_cast<chrono::milliseconds>(endTime - startTime);
-	cout << "EnforceLabelConnectivity: " << compTime.count() << endl;
 	{for(int i = 0; i < sz; i++ ) klabels[i] = nlabels[i];}
 	if(nlabels) delete [] nlabels;
 }

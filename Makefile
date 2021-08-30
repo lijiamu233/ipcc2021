@@ -1,6 +1,6 @@
-CC=gcc
-CXX=g++
-CFLAGS=-I. -O3 -march=znver1 -mtune=znver1 -mfma -mavx2 -m3dnow -fomit-frame-pointer -g  -fopenmp -Wall -ffast-math -ftree-loop-vectorize -lm # -fsanitize=address
+CC=icc
+CXX=icpc
+CFLAGS=-I. -O1 -fomit-frame-pointer  -fopenmp -Wall -ffast-math -march=core-avx2 -mfma -ipo
 DEPS = SLIC.h Makefile
 OBJ = SLIC.o
 
